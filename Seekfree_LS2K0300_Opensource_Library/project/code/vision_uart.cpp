@@ -71,14 +71,25 @@ int VisionUart::init()
 
     termios serial_config;
     std::memset(&serial_config, 0, sizeof(serial_config));
-    tcgetattr(fd_, &serial_config);
+    if (tcgetattr(fd_, &serial_config) != 0) {
+        close(fd_);
+        fd_ = -1;
+        return -2;
+    }
 
     cfmakeraw(&serial_config);
     cfsetispeed(&serial_config, baud_to_flag(UART_BAUD_RECOG));
     cfsetospeed(&serial_config, baud_to_flag(UART_BAUD_RECOG));
     serial_config.c_cflag |= (CLOCAL | CREAD);
+    serial_config.c_cc[VMIN] = 0;
+    serial_config.c_cc[VTIME] = 0;
 
-    tcsetattr(fd_, TCSANOW, &serial_config);
+    tcflush(fd_, TCIFLUSH);
+    if (tcsetattr(fd_, TCSANOW, &serial_config) != 0) {
+        close(fd_);
+        fd_ = -1;
+        return -3;
+    }
     return 0;
 }
 
@@ -92,6 +103,18 @@ void VisionUart::deinit()
     rx_len_ = 0;
     last_cls_ = 0;
     confirm_cnt_ = 0;
+}
+
+namespace
+{
+static void clear_stable_recognition(recognition_t &recognition)
+{
+    recognition.valid = false;
+    recognition.cls = 0;
+    recognition.score = 0.0f;
+    recognition.stable_count = 0;
+    recognition.stable_cls = 0;
+}
 }
 
 void VisionUart::handle_frame(const uint8_t *frame_bytes, recognition_t &recognition)
@@ -116,6 +139,9 @@ void VisionUart::handle_frame(const uint8_t *frame_bytes, recognition_t &recogni
             confirm_cnt_ = 0;
         }
         recognition.stable_count = confirm_cnt_;
+        if (confirm_cnt_ == 0) {
+            recognition.stable_cls = 0;
+        }
         return;
     }
 
@@ -138,8 +164,9 @@ void VisionUart::poll(recognition_t &recognition)
 {
     const uint64_t now = app_millis();
     if (recognition.valid && (now - recognition.timestamp_ms > RECOG_TIMEOUT_MS)) {
-        recognition.valid = false;
-        recognition.stable_count = 0;
+        clear_stable_recognition(recognition);
+        last_cls_ = 0;
+        confirm_cnt_ = 0;
     }
 
     if (fd_ < 0) {

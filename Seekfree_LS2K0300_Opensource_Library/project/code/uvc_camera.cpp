@@ -1,23 +1,11 @@
 #include "uvc_camera.hpp"
-#include <linux/videodev2.h>
-#include <sys/ioctl.h>
-#include <fcntl.h>
-#include <unistd.h>
+
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
 
-/*
- * ============================================================================
- * 文件名称: uvc_camera.cpp
- * 文件用途: UVC 摄像头采集实现
- *
- * 当前实现特点:
- * - 使用 read() 直接取帧，结构简单，容易读懂。
- * - 如果以后需要更高帧率，可以再升级为 mmap + buffer queue。
- * ============================================================================
- */
-
-UvcCamera::UvcCamera() : fd_(-1)
+UvcCamera::UvcCamera()
+    : gray_shadow_(nullptr), gray_ready_(0)
 {
 }
 
@@ -27,89 +15,92 @@ UvcCamera::~UvcCamera()
 
 int UvcCamera::init(frame_t &frame)
 {
-    fd_ = open(CAM_DEV_PATH, O_RDWR | O_NONBLOCK);
-    if (fd_ < 0) {
+    if (uvc_dev_.init(UVC_PATH) < 0)
+    {
         frame.yuyv = nullptr;
         frame.gray = nullptr;
         frame.valid = false;
         return -1;
     }
 
-    /* 配置图像格式为 YUYV */
-    v4l2_format format_config;
-    std::memset(&format_config, 0, sizeof(format_config));
-    format_config.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    format_config.fmt.pix.width = CAM_WIDTH;
-    format_config.fmt.pix.height = CAM_HEIGHT;
-    format_config.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
-    format_config.fmt.pix.field = V4L2_FIELD_NONE;
-    (void)ioctl(fd_, VIDIOC_S_FMT, &format_config);
-
     frame.width = CAM_WIDTH;
     frame.height = CAM_HEIGHT;
-    frame.yuyv = static_cast<uint8_t *>(std::malloc((size_t)CAM_WIDTH * CAM_HEIGHT * 2U));
-    frame.gray = static_cast<uint8_t *>(std::malloc((size_t)CAM_WIDTH * CAM_HEIGHT));
+    frame.yuyv = static_cast<uint8_t *>(std::malloc((size_t)CAM_WIDTH * (size_t)CAM_HEIGHT * 2U));
+    frame.gray = static_cast<uint8_t *>(std::malloc((size_t)CAM_WIDTH * (size_t)CAM_HEIGHT));
+    gray_shadow_ = static_cast<uint8_t *>(std::malloc((size_t)CAM_WIDTH * (size_t)CAM_HEIGHT));
     frame.valid = false;
+    gray_ready_ = 0;
 
-    if (frame.yuyv == nullptr || frame.gray == nullptr) {
+    if (frame.yuyv == nullptr || frame.gray == nullptr || gray_shadow_ == nullptr)
+    {
         if (frame.yuyv) std::free(frame.yuyv);
         if (frame.gray) std::free(frame.gray);
+        if (gray_shadow_) std::free(gray_shadow_);
         frame.yuyv = nullptr;
         frame.gray = nullptr;
-        close(fd_);
-        fd_ = -1;
+        gray_shadow_ = nullptr;
+        frame.valid = false;
         return -2;
     }
 
+    std::printf("uvc seekfree wrapper ready, frame = %d x %d\r\n", frame.width, frame.height);
     return 0;
 }
 
 void UvcCamera::deinit(frame_t &frame)
 {
-    if (fd_ >= 0) {
-        close(fd_);
-        fd_ = -1;
-    }
-
     if (frame.yuyv) std::free(frame.yuyv);
     if (frame.gray) std::free(frame.gray);
+    if (gray_shadow_) std::free(gray_shadow_);
+
     frame.yuyv = nullptr;
     frame.gray = nullptr;
+    gray_shadow_ = nullptr;
     frame.valid = false;
+    gray_ready_ = 0;
 }
 
 int UvcCamera::capture(frame_t &frame)
 {
-    if (fd_ < 0 || frame.yuyv == nullptr) {
+    gray_ready_ = 0;
+
+    if (frame.gray == nullptr || gray_shadow_ == nullptr)
+    {
         frame.valid = false;
         return -1;
     }
 
-    const ssize_t expected_bytes = (ssize_t)frame.width * frame.height * 2;
-    const ssize_t actual_bytes = read(fd_, frame.yuyv, (size_t)expected_bytes);
-    if (actual_bytes != expected_bytes) {
+    if (uvc_dev_.wait_image_refresh() < 0)
+    {
         frame.valid = false;
         return -2;
     }
 
+    uint8 *gray_ptr = uvc_dev_.get_gray_image_ptr();
+    if (gray_ptr == nullptr)
+    {
+        frame.valid = false;
+        return -3;
+    }
+
+    /*
+     * 当前实现仍假设底层灰度缓冲区尺寸与 CAM_WIDTH/CAM_HEIGHT 一致。
+     * 若后续接入不同分辨率摄像头，需要在这里增加尺寸查询与缩放/裁剪适配。
+     */
+    std::memcpy(gray_shadow_, gray_ptr, (size_t)CAM_WIDTH * (size_t)CAM_HEIGHT);
+    std::memcpy(frame.gray, gray_shadow_, (size_t)CAM_WIDTH * (size_t)CAM_HEIGHT);
+
     frame.timestamp_ms = app_millis();
     frame.valid = true;
+    gray_ready_ = 1;
     return 0;
 }
 
 void UvcCamera::yuyv_to_gray(frame_t &frame)
 {
-    if (!frame.valid || frame.gray == nullptr || frame.yuyv == nullptr) {
-        return;
-    }
-
+    (void)frame;
     /*
-     * YUYV 每 4 字节表示 2 个像素：Y0 U Y1 V。
-     * 循迹只需要亮度，所以直接取 Y0 和 Y1 即可得到灰度图。
+     * 逐飞官方 zf_device_uvc 已经直接给出灰度图。
+     * 为了保持你原主程序调用方式不变，这里不再重复转换。
      */
-    const int pixel_count = frame.width * frame.height;
-    for (int source_index = 0, gray_index = 0; gray_index < pixel_count; source_index += 4, gray_index += 2) {
-        frame.gray[gray_index] = frame.yuyv[source_index];
-        frame.gray[gray_index + 1] = frame.yuyv[source_index + 2];
-    }
 }
