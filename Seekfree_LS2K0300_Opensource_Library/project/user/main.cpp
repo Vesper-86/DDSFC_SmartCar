@@ -33,6 +33,15 @@
 #define TCP_SERVER_IP "10.190.147.185"
 #define TCP_SERVER_PORT 8086
 
+/* 可选边界类型：
+ * 0 = 仅灰度图
+ * 1 = X_BOUNDARY + 灰度图
+ * 2 = Y_BOUNDARY + 灰度图
+ * 4 = 仅 X_BOUNDARY
+ */
+#define INCLUDE_BOUNDARY_TYPE 0
+#define BOUNDARY_NUM (CAM_HEIGHT * 4 / 2)
+
 /* 主循环运行标志。收到 Ctrl+C 时会被置 0。 */
 static volatile int g_app_running = 1;
 
@@ -45,6 +54,12 @@ static zf_driver_tcp_client g_tcp_client;
 
 /* TCP 图像发送缓存。只传灰度图。 */
 static uint8 g_image_copy[CAM_HEIGHT][CAM_WIDTH];
+
+/* 下面这些边界数组默认不会启用，仅为保持与逐飞助手标准配置兼容。 */
+static uint8 g_xy_x1_boundary[BOUNDARY_NUM], g_xy_x2_boundary[BOUNDARY_NUM], g_xy_x3_boundary[BOUNDARY_NUM];
+static uint8 g_xy_y1_boundary[BOUNDARY_NUM], g_xy_y2_boundary[BOUNDARY_NUM], g_xy_y3_boundary[BOUNDARY_NUM];
+static uint8 g_x1_boundary[CAM_HEIGHT], g_x2_boundary[CAM_HEIGHT], g_x3_boundary[CAM_HEIGHT];
+static uint8 g_y1_boundary[CAM_WIDTH], g_y2_boundary[CAM_WIDTH], g_y3_boundary[CAM_WIDTH];
 
 /* SIGINT 信号处理函数。 */
 static void on_sigint(int)
@@ -64,6 +79,85 @@ static uint32 tcp_read_wrap(uint8 *buf, uint32 len)
     return g_tcp_client.read_data(buf, len);
 }
 
+/* 标准逐飞助手相机配置：默认只发灰度图，不改你的主流程。 */
+static void assistant_camera_config(void)
+{
+#if (0 == INCLUDE_BOUNDARY_TYPE)
+    seekfree_assistant_camera_information_config(
+        SEEKFREE_ASSISTANT_MT9V03X,
+        g_image_copy[0],
+        CAM_WIDTH,
+        CAM_HEIGHT);
+#elif (1 == INCLUDE_BOUNDARY_TYPE)
+    for (int32 i = 0; i < CAM_HEIGHT; i++)
+    {
+        g_x1_boundary[i] = 50 - (50 - 20) * i / CAM_HEIGHT;
+        g_x2_boundary[i] = CAM_WIDTH / 2;
+        g_x3_boundary[i] = 70 + (148 - 70) * i / CAM_HEIGHT;
+    }
+
+    seekfree_assistant_camera_information_config(
+        SEEKFREE_ASSISTANT_MT9V03X,
+        g_image_copy[0],
+        CAM_WIDTH,
+        CAM_HEIGHT);
+    seekfree_assistant_camera_boundary_config(
+        X_BOUNDARY,
+        CAM_HEIGHT,
+        g_x1_boundary, g_x2_boundary, g_x3_boundary,
+        NULL, NULL, NULL);
+#elif (2 == INCLUDE_BOUNDARY_TYPE)
+    for (int32 i = 0; i < CAM_WIDTH; i++)
+    {
+        g_y1_boundary[i] = 50 - (50 - 20) * i / CAM_HEIGHT;
+        g_y2_boundary[i] = CAM_WIDTH / 2;
+        g_y3_boundary[i] = 78 + (78 - 58) * i / CAM_HEIGHT;
+    }
+
+    seekfree_assistant_camera_information_config(
+        SEEKFREE_ASSISTANT_MT9V03X,
+        g_image_copy[0],
+        CAM_WIDTH,
+        CAM_HEIGHT);
+    seekfree_assistant_camera_boundary_config(
+        Y_BOUNDARY,
+        CAM_WIDTH,
+        NULL, NULL, NULL,
+        g_y1_boundary, g_y2_boundary, g_y3_boundary);
+#elif (4 == INCLUDE_BOUNDARY_TYPE)
+    for (int32 i = 0; i < CAM_HEIGHT; i++)
+    {
+        g_x1_boundary[i] = 70 - (70 - 20) * i / CAM_HEIGHT;
+        g_x2_boundary[i] = CAM_WIDTH / 2;
+        g_x3_boundary[i] = 80 + (159 - 80) * i / CAM_HEIGHT;
+    }
+
+    seekfree_assistant_camera_information_config(
+        SEEKFREE_ASSISTANT_MT9V03X,
+        NULL,
+        CAM_WIDTH,
+        CAM_HEIGHT);
+    seekfree_assistant_camera_boundary_config(
+        X_BOUNDARY,
+        CAM_HEIGHT,
+        g_x1_boundary, g_x2_boundary, g_x3_boundary,
+        NULL, NULL, NULL);
+#else
+    seekfree_assistant_camera_information_config(
+        SEEKFREE_ASSISTANT_MT9V03X,
+        g_image_copy[0],
+        CAM_WIDTH,
+        CAM_HEIGHT);
+#endif
+
+    (void)g_xy_x1_boundary;
+    (void)g_xy_x2_boundary;
+    (void)g_xy_x3_boundary;
+    (void)g_xy_y1_boundary;
+    (void)g_xy_y2_boundary;
+    (void)g_xy_y3_boundary;
+}
+
 /* 初始化 TCP 与逐飞助手图像通道。 */
 static int init_tcp_transfer()
 {
@@ -80,12 +174,8 @@ static int init_tcp_transfer()
     /* 初始化逐飞助手通信接口 */
     seekfree_assistant_interface_init(tcp_send_wrap, tcp_read_wrap);
 
-    /* 只配置灰度图，不配置边界 */
-    seekfree_assistant_camera_information_config(
-        SEEKFREE_ASSISTANT_MT9V03X,
-        g_image_copy[0],
-        CAM_WIDTH,
-        CAM_HEIGHT);
+    /* 按逐飞助手标准方式配置图传；默认仅灰度图 */
+    assistant_camera_config();
 
     return 0;
 }
@@ -100,6 +190,12 @@ static void tcp_send_gray_frame(const frame_t &frame)
 
     std::memcpy(g_image_copy[0], frame.gray, (size_t)frame.width * (size_t)frame.height);
     seekfree_assistant_camera_send();
+}
+
+/* 保持逐飞助手下行协议可用（在线调试/参数等）。 */
+static void tcp_poll_assistant(void)
+{
+    seekfree_assistant_data_analysis();
 }
 
 /* 整型斜坡限幅，防止电机命令一帧内跳变过大。 */
@@ -357,6 +453,7 @@ int main()
         {
             last_tcp_tick_ms = app.now_ms;
             tcp_send_gray_frame(app.frame);
+            tcp_poll_assistant();
         }
 
         system_delay_ms(1);
