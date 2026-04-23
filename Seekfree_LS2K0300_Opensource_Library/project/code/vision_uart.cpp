@@ -1,4 +1,5 @@
 #include "vision_uart.hpp"
+
 #include <termios.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -7,20 +8,28 @@
 /*
  * ============================================================================
  * 文件名称: vision_uart.cpp
- * 文件用途: 识别串口协议解析实现
+ * 文件用途: 识别串口协议解析实现（增强版）
+ *
+ * 改动重点:
+ * 1. 解析器在尾字节/校验错误时做更稳的重同步，而不是直接盲目吃掉 6 字节。
+ * 2. 低置信度帧不再直接重置稳定结果，只做衰减处理。
+ * 3. 识别超时后自动失效，避免使用陈旧 stable_cls。
  * ============================================================================
  */
+
+namespace
+{
+static constexpr size_t kFrameLen = 6;
 
 static speed_t baud_to_flag(int baud)
 {
     switch (baud) {
-        case 115200: return B115200;
-        case 57600:  return B57600;
-        default:     return B115200;
+    case 115200: return B115200;
+    case 57600:  return B57600;
+    default:     return B115200;
     }
 }
 
-/* 对输入字节做逐字节异或校验。 */
 static uint8_t checksum_xor(const uint8_t *buffer, size_t length)
 {
     uint8_t checksum = 0;
@@ -30,6 +39,18 @@ static uint8_t checksum_xor(const uint8_t *buffer, size_t length)
     return checksum;
 }
 
+static bool is_valid_frame(const uint8_t *frame_bytes)
+{
+    if (frame_bytes[0] != UART_FRAME_HEAD1 ||
+        frame_bytes[1] != UART_FRAME_HEAD2 ||
+        frame_bytes[5] != UART_FRAME_TAIL) {
+        return false;
+    }
+
+    return checksum_xor(&frame_bytes[2], 2) == frame_bytes[4];
+}
+} // namespace
+
 VisionUart::VisionUart()
     : fd_(-1), rx_len_(0), last_cls_(0), confirm_cnt_(0)
 {
@@ -38,6 +59,7 @@ VisionUart::VisionUart()
 
 VisionUart::~VisionUart()
 {
+    deinit();
 }
 
 int VisionUart::init()
@@ -50,10 +72,12 @@ int VisionUart::init()
     termios serial_config;
     std::memset(&serial_config, 0, sizeof(serial_config));
     tcgetattr(fd_, &serial_config);
+
     cfmakeraw(&serial_config);
     cfsetispeed(&serial_config, baud_to_flag(UART_BAUD_RECOG));
     cfsetospeed(&serial_config, baud_to_flag(UART_BAUD_RECOG));
     serial_config.c_cflag |= (CLOCAL | CREAD);
+
     tcsetattr(fd_, TCSANOW, &serial_config);
     return 0;
 }
@@ -64,6 +88,7 @@ void VisionUart::deinit()
         close(fd_);
         fd_ = -1;
     }
+
     rx_len_ = 0;
     last_cls_ = 0;
     confirm_cnt_ = 0;
@@ -71,24 +96,30 @@ void VisionUart::deinit()
 
 void VisionUart::handle_frame(const uint8_t *frame_bytes, recognition_t &recognition)
 {
-    if (frame_bytes[0] != UART_FRAME_HEAD1 || frame_bytes[1] != UART_FRAME_HEAD2 || frame_bytes[5] != UART_FRAME_TAIL) {
-        return;
-    }
-
-    if (checksum_xor(&frame_bytes[2], 2) != frame_bytes[4]) {
+    if (!is_valid_frame(frame_bytes)) {
         return;
     }
 
     const uint8_t cls = frame_bytes[2];
-    const float score = frame_bytes[3] / 100.0f;
+    const float score = static_cast<float>(frame_bytes[3]) / 100.0f;
+    const uint64_t now = app_millis();
 
     recognition.valid = true;
     recognition.cls = cls;
     recognition.score = score;
-    recognition.timestamp_ms = app_millis();
+    recognition.timestamp_ms = now;
 
-    /* 连续帧确认，减少偶发误识别抖动 */
-    if (cls == last_cls_ && score >= RECOG_SCORE_MIN) {
+    if (score < RECOG_SCORE_MIN) {
+        if (confirm_cnt_ > RECOG_CONFIRM_DECAY) {
+            confirm_cnt_ -= RECOG_CONFIRM_DECAY;
+        } else {
+            confirm_cnt_ = 0;
+        }
+        recognition.stable_count = confirm_cnt_;
+        return;
+    }
+
+    if (cls == last_cls_) {
         if (confirm_cnt_ < 255) {
             ++confirm_cnt_;
         }
@@ -97,14 +128,20 @@ void VisionUart::handle_frame(const uint8_t *frame_bytes, recognition_t &recogni
         confirm_cnt_ = 1;
     }
 
+    recognition.stable_count = confirm_cnt_;
     if (confirm_cnt_ >= RECOG_CONFIRM_FRAMES) {
         recognition.stable_cls = cls;
-        recognition.stable_count = confirm_cnt_;
     }
 }
 
 void VisionUart::poll(recognition_t &recognition)
 {
+    const uint64_t now = app_millis();
+    if (recognition.valid && (now - recognition.timestamp_ms > RECOG_TIMEOUT_MS)) {
+        recognition.valid = false;
+        recognition.stable_count = 0;
+    }
+
     if (fd_ < 0) {
         return;
     }
@@ -115,34 +152,43 @@ void VisionUart::poll(recognition_t &recognition)
         return;
     }
 
-    /* 先把新收到的数据追加到接收缓存 */
-    if (rx_len_ + (size_t)read_size > sizeof(rx_buf_)) {
+    if (rx_len_ + static_cast<size_t>(read_size) > sizeof(rx_buf_)) {
         rx_len_ = 0;
     }
 
-    std::memcpy(&rx_buf_[rx_len_], read_buffer, (size_t)read_size);
-    rx_len_ += (size_t)read_size;
+    std::memcpy(&rx_buf_[rx_len_], read_buffer, static_cast<size_t>(read_size));
+    rx_len_ += static_cast<size_t>(read_size);
 
-    /* 循环解析缓存中的完整协议帧 */
-    while (rx_len_ >= 6) {
+    while (rx_len_ >= kFrameLen) {
         size_t frame_head_pos = 0;
-
         while (frame_head_pos + 1 < rx_len_ &&
-              !(rx_buf_[frame_head_pos] == UART_FRAME_HEAD1 && rx_buf_[frame_head_pos + 1] == UART_FRAME_HEAD2)) {
+               !(rx_buf_[frame_head_pos] == UART_FRAME_HEAD1 &&
+                 rx_buf_[frame_head_pos + 1] == UART_FRAME_HEAD2)) {
             ++frame_head_pos;
         }
 
-        /* 抛弃帧头之前的无效字节 */
         if (frame_head_pos > 0) {
             std::memmove(rx_buf_, rx_buf_ + frame_head_pos, rx_len_ - frame_head_pos);
             rx_len_ -= frame_head_pos;
-            if (rx_len_ < 6) {
+            if (rx_len_ < kFrameLen) {
                 break;
             }
         }
 
+        if (rx_buf_[5] != UART_FRAME_TAIL) {
+            std::memmove(rx_buf_, rx_buf_ + 1, rx_len_ - 1);
+            --rx_len_;
+            continue;
+        }
+
+        if (!is_valid_frame(rx_buf_)) {
+            std::memmove(rx_buf_, rx_buf_ + 1, rx_len_ - 1);
+            --rx_len_;
+            continue;
+        }
+
         handle_frame(rx_buf_, recognition);
-        std::memmove(rx_buf_, rx_buf_ + 6, rx_len_ - 6);
-        rx_len_ -= 6;
+        std::memmove(rx_buf_, rx_buf_ + kFrameLen, rx_len_ - kFrameLen);
+        rx_len_ -= kFrameLen;
     }
 }
