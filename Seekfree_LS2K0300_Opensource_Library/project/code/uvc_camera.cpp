@@ -15,7 +15,7 @@ UvcCamera::~UvcCamera()
 
 int UvcCamera::init(frame_t &frame)
 {
-    if (uvc_dev_.init(UVC_PATH) < 0)
+    if (uvc_dev_.init(CAM_DEV_PATH) < 0)
     {
         frame.yuyv = nullptr;
         frame.gray = nullptr;
@@ -28,6 +28,7 @@ int UvcCamera::init(frame_t &frame)
     frame.yuyv = static_cast<uint8_t *>(std::malloc((size_t)CAM_WIDTH * (size_t)CAM_HEIGHT * 2U));
     frame.gray = static_cast<uint8_t *>(std::malloc((size_t)CAM_WIDTH * (size_t)CAM_HEIGHT));
     gray_shadow_ = static_cast<uint8_t *>(std::malloc((size_t)CAM_WIDTH * (size_t)CAM_HEIGHT));
+    frame.timestamp_ms = 0;
     frame.valid = false;
     gray_ready_ = 0;
 
@@ -43,7 +44,10 @@ int UvcCamera::init(frame_t &frame)
         return -2;
     }
 
-    std::printf("uvc seekfree wrapper ready, frame = %d x %d\r\n", frame.width, frame.height);
+    std::printf("uvc seekfree wrapper ready, frame = %d x %d, dev = %s\r\n",
+                frame.width,
+                frame.height,
+                CAM_DEV_PATH);
     return 0;
 }
 
@@ -84,8 +88,9 @@ int UvcCamera::capture(frame_t &frame)
     }
 
     /*
-     * 当前实现仍假设底层灰度缓冲区尺寸与 CAM_WIDTH/CAM_HEIGHT 一致。
-     * 若后续接入不同分辨率摄像头，需要在这里增加尺寸查询与缩放/裁剪适配。
+     * 说明:
+     * - 当前实现假设底层灰度图分辨率与 CAM_WIDTH / CAM_HEIGHT 一致。
+     * - 若后续接入不同分辨率相机，需要在这里增加尺寸查询与缩放/裁剪适配。
      */
     std::memcpy(gray_shadow_, gray_ptr, (size_t)CAM_WIDTH * (size_t)CAM_HEIGHT);
     std::memcpy(frame.gray, gray_shadow_, (size_t)CAM_WIDTH * (size_t)CAM_HEIGHT);
@@ -101,6 +106,6 @@ void UvcCamera::yuyv_to_gray(frame_t &frame)
     (void)frame;
     /*
      * 逐飞官方 zf_device_uvc 已经直接给出灰度图。
-     * 为了保持你原主程序调用方式不变，这里不再重复转换。
+     * 为了保持旧主程序调用方式不变，这里不再重复转换。
      */
 }

@@ -15,8 +15,15 @@
 /* -------------------------
  * 工程基本信息
  * ------------------------- */
-#define APP_NAME "DDSFC_SmartCar_SeekfreePort_Lite"
-#define APP_VERSION "2.3.0_tuned"
+#define APP_NAME "DDSFC_ThreeWheel_NoServo_Integrated"
+#define APP_VERSION "3.0.0"
+
+/* -------------------------
+ * 功能开关
+ * ------------------------- */
+#define DISPLAY_ENABLE 1
+#define VISION_UART_ENABLE 1
+#define TCP_ASSISTANT_ENABLE 1
 
 /* -------------------------
  * 任务调度周期，单位: ms
@@ -25,6 +32,8 @@
 #define TRACK_PERIOD_MS 20
 #define UART_PERIOD_MS 10
 #define DISPLAY_PERIOD_MS 100
+#define TCP_SEND_PERIOD_MS 120
+#define TCP_ASSISTANT_POLL_PERIOD_MS 5
 
 /* -------------------------
  * 数据有效期，单位: ms
@@ -39,6 +48,27 @@
 #define CAM_WIDTH 320
 #define CAM_HEIGHT 240
 #define CAM_FPS 60
+
+/* -------------------------
+ * 图传参数
+ * -------------------------
+ * 说明:
+ * - 这里只做逐飞助手的灰度图传。
+ * - 如果不需要图传，直接把 TCP_ASSISTANT_ENABLE 改为 0。
+ * ------------------------- */
+#define TCP_SERVER_IP "10.190.147.185"
+#define TCP_SERVER_PORT 8086
+
+/* -------------------------
+ * 图传叠加边界类型
+ * -------------------------
+ * 0: 只发灰度图
+ * 1: 发 X_BOUNDARY
+ * 2: 发 Y_BOUNDARY
+ * 4: 只发边界不发底图
+ * ------------------------- */
+#define INCLUDE_BOUNDARY_TYPE 0
+#define BOUNDARY_NUM (CAM_HEIGHT * 2)
 
 /* -------------------------
  * 循迹算法参数
@@ -59,7 +89,7 @@
 #define TRACK_SLOWDOWN_ERROR 35.0f
 #define TRACK_BRAKE_ERROR 60.0f
 
-/* 新增：图像鲁棒性参数 */
+/* 图像鲁棒性参数 */
 #define TRACK_OTSU_SAMPLE_STRIDE 2
 #define TRACK_LOCAL_SEARCH_MARGIN 40
 #define TRACK_SEED_SEARCH_HALF_WIDTH 72
@@ -70,12 +100,16 @@
 #define TRACK_CURVATURE_FILTER_ALPHA 0.25f
 #define TRACK_VALID_RATIO_MIN 0.34f
 
-/* 新增：速度缩放补偿参数 */
+/* 速度缩放补偿参数 */
 #define TRACK_SPEED_CURVATURE_SLOWDOWN 18.0f
 #define TRACK_SPEED_QUALITY_FLOOR 0.45f
 
 /* -------------------------
  * 电机控制参数
+ * -------------------------
+ * 说明:
+ * - 本车为“三轮无舵机”结构，方向控制通过左右驱动轮差速实现。
+ * - 第三轮通常为万向轮/随动轮，不参与主动转向控制。
  * ------------------------- */
 #define MOTOR_CMD_MAX 10000
 #define MOTOR_CMD_MIN (-10000)
@@ -90,24 +124,24 @@
 
 /* -------------------------
  * 左右轮速度环 PID 参数
- * -------------------------
- * 在保持原接口不变的前提下：
- * 1. 打开少量积分，帮助低速稳态跟随。
- * 2. 在 control_utils.cpp 内使用积分分离 + 微分滤波。
- */
+ * ------------------------- */
 #define SPEED_PID_KP 1.60f
 #define SPEED_PID_KI 0.10f
 #define SPEED_PID_KD 0.08f
 #define SPEED_PID_I_LIMIT 150.0f
 #define SPEED_PID_OUT_LIMIT 7000.0f
 
-/* 新增：PID 内部增强参数 */
+/* PID 内部增强参数 */
 #define SPEED_PID_D_FILTER_ALPHA 0.35f
 #define SPEED_PID_INTEGRAL_ENABLE_ERR_MIN 0.60f
 #define SPEED_PID_INTEGRAL_RELEASE_GAIN 0.35f
 
 /* -------------------------
  * 方向控制（模糊 PD）参数
+ * -------------------------
+ * 说明:
+ * - 输入是图像循迹误差。
+ * - 输出是左右轮差速量 differential_output。
  * ------------------------- */
 #define STEER_PD_KP_BASE 5.5f
 #define STEER_PD_KD_BASE 10.0f
@@ -141,11 +175,6 @@
 
 /* -------------------------
  * 编码器参数
- * -------------------------
- * 说明:
- * - 当前按“方向编码器”设备节点写法。
- * - 如果你的系统实际使用正交编码器，请改为 ZF_ENCODER_QUAD_1 / ZF_ENCODER_QUAD_2。
- * - ENCODER_COUNTS_PER_WHEEL_REV 必须按你的编码器实际参数校准。
  * ------------------------- */
 #define ENCODER_LEFT_PATH ZF_ENCODER_DIR_1
 #define ENCODER_RIGHT_PATH ZF_ENCODER_DIR_2
@@ -156,10 +185,6 @@
 
 /* -------------------------
  * 电机输出平滑参数
- * -------------------------
- * 说明:
- * - 每个控制周期内，电机命令最大变化量。
- * - 值越小越平滑，值越大响应越快。
  * ------------------------- */
 #define MOTOR_CMD_RAMP_STEP 350
 
