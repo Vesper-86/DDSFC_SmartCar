@@ -8,7 +8,8 @@
  * 当前版本重点:
  * 1. 保留基础循迹 + 差速控制主链；
  * 2. 增加十字识别 / 环岛识别 / 补线状态机；
- * 3. 所有与元素区相关的阈值也统一收口到这里。
+ * 3. 为十字 / 环岛补上“超时退出”保护；
+ * 4. 为普通 / 十字 / 环岛分别配置独立目标速度。
  * ============================================================================
  */
 
@@ -16,7 +17,7 @@
  * 工程基本信息
  * ------------------------- */
 #define APP_NAME "DDSFC_ThreeWheel_NoServo_CrossRing"
-#define APP_VERSION "4.0.0"
+#define APP_VERSION "4.1.0"
 
 /* -------------------------
  * 功能开关
@@ -106,9 +107,23 @@
 #define TRACK_SPEED_CURVATURE_SLOWDOWN 18.0f
 #define TRACK_SPEED_QUALITY_FLOOR 0.45f
 
-/* 元素区速度限幅。 */
-#define TRACK_CROSS_SPEED_SCALE 0.72f
-#define TRACK_RING_SPEED_SCALE 0.60f
+/* 元素状态机参数。 */
+#define TRACK_COUNTER_MAX 10
+#define TRACK_CROSS_ENTER_COUNT 2
+#define TRACK_RING_ENTER_COUNT 2
+#define TRACK_CROSS_HOLD_FRAMES 8
+#define TRACK_RING_HOLD_FRAMES 12
+
+/*
+ * 元素区超时退出保护。
+ * 说明:
+ * - TRACK_PERIOD_MS 默认是 20ms。
+ * - 例如 45 帧大约等于 900ms。
+ * - 若元素区卡住，超过这个时间会强制退回 NORMAL。
+ */
+#define TRACK_CROSS_TIMEOUT_FRAMES 45
+#define TRACK_RING_TIMEOUT_FRAMES 90
+#define TRACK_STATE_REENTER_COOLDOWN_FRAMES 6
 
 /* -------------------------
  * 十字 / 环岛 图像判定阈值
@@ -121,19 +136,26 @@
 #define TRACK_CORNER_SLOPE_MIN 6
 #define TRACK_CORNER_WIDTH_JUMP_MIN 10
 
-/* 元素状态机参数。 */
-#define TRACK_COUNTER_MAX 10
-#define TRACK_CROSS_ENTER_COUNT 2
-#define TRACK_RING_ENTER_COUNT 2
-#define TRACK_CROSS_HOLD_FRAMES 8
-#define TRACK_RING_HOLD_FRAMES 12
-
 /* -------------------------
  * 电机控制参数
  * ------------------------- */
 #define MOTOR_CMD_MAX 10000
 #define MOTOR_CMD_MIN (-10000)
-#define MOTOR_BASE_SPEED 240.0f
+
+/*
+ * 三档目标速度。
+ * 说明:
+ * - NORMAL: 普通直道 / 弯道的基础目标速度。
+ * - CROSS : 十字区主动降一档，避免冲飞。
+ * - RING  : 环岛再降一档，优先保证可控性。
+ */
+#define MOTOR_BASE_SPEED_NORMAL 240.0f
+#define MOTOR_BASE_SPEED_CROSS  180.0f
+#define MOTOR_BASE_SPEED_RING   150.0f
+
+/* 兼容旧代码中对 MOTOR_BASE_SPEED 的引用。 */
+#define MOTOR_BASE_SPEED MOTOR_BASE_SPEED_NORMAL
+
 #define MOTOR_TURN_SPEED_LIMIT 360.0f
 #define MOTOR_START_SPEED 0.0f
 #define MOTOR_DEADZONE_DUTY 380

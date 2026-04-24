@@ -20,7 +20,8 @@
  * 当前版本在基础差速循迹上，增加了：
  * 1. 十字图像识别与补线；
  * 2. 左 / 右环岛图像识别与补线；
- * 3. 屏幕直接显示当前元素状态，方便现场调参。
+ * 3. 十字 / 环岛增加超时退出，避免卡状态；
+ * 4. 普通 / 十字 / 环岛分别使用三档基础速度。
  * ============================================================================
  */
 
@@ -301,7 +302,8 @@ static void update_motion_control(app_context_t &app,
         differential_output = clampf(differential_output, -DIFF_OUT_LIMIT, DIFF_OUT_LIMIT);
 
         speed_scale = line_track_compute_speed_scale(app.track);
-        const float base_speed = MOTOR_BASE_SPEED * speed_scale;
+        const float state_base_speed = line_track_state_base_speed(app.track);
+        const float base_speed = state_base_speed * speed_scale;
 
         app.motor.left_target_rps =
             clampf(base_speed - differential_output, 0.0f, MOTOR_TURN_SPEED_LIMIT) / 100.0f;
@@ -388,10 +390,10 @@ static void update_display_view(IpsStatusView &display, const app_context_t &app
 
     std::snprintf(line3,
                   sizeof(line3),
-                  "%s C:%u R:%u SC:%0.2f",
+                  "%s F:%u TO:%u SC:%0.2f",
                   line_track_element_name(app.track.element),
-                  app.track.cross_flag ? 1U : 0U,
-                  (unsigned)app.track.ring_flag,
+                  (unsigned)app.track.state_elapsed_frames,
+                  app.track.timeout_exit ? 1U : 0U,
                   app.recog.score);
 
     display.show_status(line1, line2, line3);
