@@ -2,24 +2,20 @@
 
 #include "app_types.hpp"
 
-/*
- * line_track_init()
- * ---------------------------------------------------------------------------
- * 初始化循迹结果结构体，清空历史数据。
- */
+/* 初始化循迹结果结构体。 */
 void line_track_init(track_result_t &track_result);
 
 /*
- * line_track_process()
- * ---------------------------------------------------------------------------
- * 输入一帧灰度图，在 ROI 区域内做多扫描线边界搜索，输出赛道中心偏差。
+ * 输入一帧灰度图，输出：
+ * 1. 基础循迹误差
+ * 2. 十字 / 环岛图像判定
+ * 3. 元素区补线后的中心线结果
  */
 void line_track_process(const frame_t &frame, track_result_t &track_result);
 
-/*
- * line_track_compute_speed_scale()
- * ---------------------------------------------------------------------------
- * 根据偏差大小返回一个速度缩放系数。
- * 偏差越大，返回值越小，用于自动减速。
- */
+/* 根据偏差、曲率、图像质量和元素区状态返回速度缩放系数。 */
 float line_track_compute_speed_scale(const track_result_t &track_result);
+
+/* 返回当前元素名称，便于显示调试。 */
+const char *line_track_element_name(uint8_t element);
+const char *line_track_state_name(uint8_t state);

@@ -9,30 +9,46 @@
 /*
  * ============================================================================
  * 文件名称: app_types.hpp
- * 文件用途: 定义主程序需要共享的数据结构和基础工具函数
+ * 文件用途: 定义主程序共享的数据结构和基础工具函数
  *
- * 设计原则:
- * - 每个模块尽量围绕 app_context_t 交换数据。
- * - 减少到处散落的全局变量。
- * - 让主循环的数据流更清楚：摄像头 -> 循迹 -> 控制 -> 显示。
+ * 说明:
+ * - 当前版本已经把“十字 / 环岛”图像状态纳入 track_result_t。
+ * - 主循环仍然只围绕一个 app_context_t 交换数据，方便后续继续扩展。
  * ============================================================================
  */
 
 /* 系统运行状态。 */
 enum system_state_e {
-    SYS_READY = 0,   /* 已初始化完成，等待进入主循环 */
-    SYS_RUNNING,     /* 正常运行中 */
-    SYS_ERROR        /* 发生堵转等异常 */
+    SYS_READY = 0,
+    SYS_RUNNING,
+    SYS_ERROR
 };
 
-/* 通用 PID 控制器结构体。
- * 说明:
- * - kp/ki/kd      : 比例、积分、微分系数
- * - integral      : 当前积分累计值
- * - last_error    : 上一周期误差
- * - i_limit       : 积分限幅
- * - out_limit     : 输出限幅
- */
+/* 图像元素判定结果。 */
+enum track_element_e {
+    TRACK_ELEMENT_NONE = 0,
+    TRACK_ELEMENT_STRAIGHT,
+    TRACK_ELEMENT_CROSS,
+    TRACK_ELEMENT_RING_LEFT,
+    TRACK_ELEMENT_RING_RIGHT
+};
+
+/* 图像状态机。 */
+enum track_state_e {
+    TRACK_STATE_NORMAL = 0,
+    TRACK_STATE_CROSS,
+    TRACK_STATE_RING_LEFT,
+    TRACK_STATE_RING_RIGHT
+};
+
+/* 角点信息。 */
+struct track_point_t {
+    int x;
+    int y;
+    bool valid;
+};
+
+/* 通用 PID 控制器结构体。 */
 struct pid_controller_t {
     float kp;
     float ki;
@@ -45,61 +61,89 @@ struct pid_controller_t {
 
 /* 一帧图像的数据容器。 */
 struct frame_t {
-    int width;                /* 图像宽度 */
-    int height;               /* 图像高度 */
-    uint8_t *yuyv;            /* 原始 YUYV 数据缓冲区 */
-    uint8_t *gray;            /* 灰度图缓冲区，仅保留亮度通道 */
-    uint64_t timestamp_ms;    /* 最近一次成功采集时间戳 */
-    bool valid;               /* 当前帧是否有效 */
+    int width;
+    int height;
+    uint8_t *yuyv;
+    uint8_t *gray;
+    uint64_t timestamp_ms;
+    bool valid;
 };
 
-/* 循迹算法输出结果。 */
+/* 循迹算法输出结果。
+ *
+ * 说明:
+ * - left_edge / right_edge / center 仍保留“给控制器看的抽样扫描线结果”。
+ * - element / state / ring_flag / cross_flag 用于上层理解当前图像处于什么元素区。
+ */
 struct track_result_t {
-    bool valid;                              /* 本次循迹结果是否可信 */
-    bool lost;                               /* 是否丢线 */
-    int left_edge[TRACK_SCAN_LINES];         /* 每条扫描线找到的左边界 */
-    int right_edge[TRACK_SCAN_LINES];        /* 每条扫描线找到的右边界 */
-    int center[TRACK_SCAN_LINES];            /* 每条扫描线计算出的中心 */
-    float center_avg;                        /* 多扫描线中心平均值 */
-    float error;                             /* 原始偏差 = 图像中心 - 赛道中心 */
-    float error_filtered;                    /* 低通滤波后的偏差 */
-    uint64_t timestamp_ms;                   /* 结果更新时间戳 */
+    bool valid;
+    bool lost;
+
+    int left_edge[TRACK_SCAN_LINES];
+    int right_edge[TRACK_SCAN_LINES];
+    int center[TRACK_SCAN_LINES];
+
+    float center_avg;
+    float error;
+    float error_filtered;
+    float curvature_hint;
+    float quality_hint;
+    uint64_t timestamp_ms;
+
+    uint8_t element;
+    uint8_t state;
+    uint8_t state_hold;
+    bool cross_flag;
+    uint8_t ring_flag;              /* 0: 无 1: 左环 2: 右环 */
+
+    int lane_width_base;
+    int lane_width_far;
+
+    uint8_t left_lost_total;
+    uint8_t right_lost_total;
+    uint8_t both_lost_total;
+    uint8_t left_lost_mid;
+    uint8_t right_lost_mid;
+    uint8_t both_lost_mid;
+
+    track_point_t left_up;
+    track_point_t right_up;
+    track_point_t left_down;
+    track_point_t right_down;
 };
 
-/* 串口识别结果。当前版本仅做显示与保留，不触发动作。 */
+/* 串口识别结果。 */
 struct recognition_t {
-    bool valid;               /* 最近是否解析到有效识别帧 */
-    uint8_t cls;              /* 当前瞬时类别 */
-    float score;              /* 当前瞬时置信度 */
-    uint8_t stable_cls;       /* 连续确认后的稳定类别 */
-    uint8_t stable_count;     /* 已连续确认的帧数 */
-    uint64_t timestamp_ms;    /* 最近一次识别更新时间 */
+    bool valid;
+    uint8_t cls;
+    float score;
+    uint8_t stable_cls;
+    uint8_t stable_count;
+    uint64_t timestamp_ms;
 };
 
 /* 电机运行状态。 */
 struct motor_state_t {
-    float left_speed_rps;     /* 左轮实际速度（当前版本可由模拟值提供） */
-    float right_speed_rps;    /* 右轮实际速度 */
-    float left_target_rps;    /* 左轮目标速度 */
-    float right_target_rps;   /* 右轮目标速度 */
-    int left_cmd;             /* 左轮最终输出命令 */
-    int right_cmd;            /* 右轮最终输出命令 */
-    bool blocked;             /* 是否判定堵转 */
-    uint64_t blocked_since_ms;/* 首次满足堵转条件的时间 */
+    float left_speed_rps;
+    float right_speed_rps;
+    float left_target_rps;
+    float right_target_rps;
+    int left_cmd;
+    int right_cmd;
+    bool blocked;
+    uint64_t blocked_since_ms;
 };
 
-/* 主循环统一上下文。
- * 所有主要模块都围绕它读写状态。 */
+/* 主循环统一上下文。 */
 struct app_context_t {
-    frame_t frame;                  /* 摄像头帧 */
-    track_result_t track;           /* 循迹输出 */
-    recognition_t recog;            /* 识别结果 */
-    motor_state_t motor;            /* 电机状态 */
-    system_state_e system_state;    /* 当前系统状态 */
-    uint64_t now_ms;                /* 本轮循环时间戳 */
+    frame_t frame;
+    track_result_t track;
+    recognition_t recog;
+    motor_state_t motor;
+    system_state_e system_state;
+    uint64_t now_ms;
 };
 
-/* 获取当前毫秒时间戳。 */
 static inline uint64_t app_millis()
 {
     struct timeval tv;
@@ -107,13 +151,11 @@ static inline uint64_t app_millis()
     return (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)(tv.tv_usec / 1000ULL);
 }
 
-/* 浮点限幅。 */
 static inline float clampf(float x, float min_v, float max_v)
 {
     return (x < min_v) ? min_v : ((x > max_v) ? max_v : x);
 }
 
-/* 整型限幅。 */
 static inline int clampi(int x, int min_v, int max_v)
 {
     return (x < min_v) ? min_v : ((x > max_v) ? max_v : x);

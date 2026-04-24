@@ -3,20 +3,20 @@
 /*
  * ============================================================================
  * 文件名称: app_config.hpp
- * 文件用途: 本工程全部“可调宏参数”的统一入口
+ * 文件用途: 本工程全部可调宏参数的统一入口
  *
- * 使用建议:
- * 1. 现场调参时，优先只改这个文件。
- * 2. 不要把阈值、速度、周期常量散落到各个 .cpp 文件里。
- * 3. 每个宏前都保留了用途说明，方便后续比赛前快速查找。
+ * 当前版本重点:
+ * 1. 保留基础循迹 + 差速控制主链；
+ * 2. 增加十字识别 / 环岛识别 / 补线状态机；
+ * 3. 所有与元素区相关的阈值也统一收口到这里。
  * ============================================================================
  */
 
 /* -------------------------
  * 工程基本信息
  * ------------------------- */
-#define APP_NAME "DDSFC_ThreeWheel_NoServo_Integrated"
-#define APP_VERSION "3.0.0"
+#define APP_NAME "DDSFC_ThreeWheel_NoServo_CrossRing"
+#define APP_VERSION "4.0.0"
 
 /* -------------------------
  * 功能开关
@@ -51,17 +51,12 @@
 
 /* -------------------------
  * 图传参数
- * -------------------------
- * 说明:
- * - 这里只做逐飞助手的灰度图传。
- * - 如果不需要图传，直接把 TCP_ASSISTANT_ENABLE 改为 0。
  * ------------------------- */
 #define TCP_SERVER_IP "10.190.147.185"
 #define TCP_SERVER_PORT 8086
 
 /* -------------------------
  * 图传叠加边界类型
- * -------------------------
  * 0: 只发灰度图
  * 1: 发 X_BOUNDARY
  * 2: 发 Y_BOUNDARY
@@ -71,45 +66,70 @@
 #define BOUNDARY_NUM (CAM_HEIGHT * 2)
 
 /* -------------------------
- * 循迹算法参数
+ * 基础循迹参数
  * ------------------------- */
 #define TRACK_SCAN_LINES 6
 #define TRACK_ROI_Y0 130
 #define TRACK_ROI_Y1 235
+#define TRACK_TOP_LINE 8
+#define TRACK_SEARCH_FINISH_LINE 30
 
-/* 保底阈值。实际运行时，line_track.cpp 会基于 ROI Otsu 做自适应修正。 */
+/* 自适应阈值基础值与限幅。 */
 #define TRACK_BIN_THRESHOLD 100
+#define TRACK_BINARY_MIN 40
+#define TRACK_BINARY_MAX 180
+#define TRACK_OTSU_SAMPLE_STRIDE 2
 
-/* 保留原有宏，兼容旧代码含义。 */
-#define TRACK_MIN_VALID_POINTS 20
+/* 图像中心与误差滤波。 */
 #define TRACK_CENTER_X (CAM_WIDTH / 2)
 #define TRACK_ERROR_FILTER_ALPHA 0.20f
-
-/* 根据偏差大小自动降速的两个阈值 */
-#define TRACK_SLOWDOWN_ERROR 35.0f
-#define TRACK_BRAKE_ERROR 60.0f
-
-/* 图像鲁棒性参数 */
-#define TRACK_OTSU_SAMPLE_STRIDE 2
-#define TRACK_LOCAL_SEARCH_MARGIN 40
-#define TRACK_SEED_SEARCH_HALF_WIDTH 72
-#define TRACK_MIN_LANE_WIDTH 26
-#define TRACK_MAX_LANE_WIDTH 220
-#define TRACK_EDGE_GRAD_MIN 8
-#define TRACK_WIDTH_FILTER_ALPHA 0.25f
 #define TRACK_CURVATURE_FILTER_ALPHA 0.25f
 #define TRACK_VALID_RATIO_MIN 0.34f
 
-/* 速度缩放补偿参数 */
+/* 边界搜索与赛道宽度约束。 */
+#define TRACK_LOCAL_SEARCH_MARGIN 40
+#define TRACK_SEED_SEARCH_HALF_WIDTH 72
+#define TRACK_MIN_SEARCH_HALF 18
+#define TRACK_MIN_LANE_WIDTH 26
+#define TRACK_MAX_LANE_WIDTH 220
+#define TRACK_DEFAULT_WIDTH 70
+#define TRACK_EDGE_GRAD_MIN 8
+#define TRACK_WIDTH_FILTER_ALPHA 0.25f
+
+/* 中线输出平滑。 */
+#define TRACK_SMOOTH_ALPHA_NUM 8
+#define TRACK_SMOOTH_ALPHA_DEN 10
+
+/* 根据偏差大小自动降速。 */
+#define TRACK_SLOWDOWN_ERROR 35.0f
+#define TRACK_BRAKE_ERROR 60.0f
 #define TRACK_SPEED_CURVATURE_SLOWDOWN 18.0f
 #define TRACK_SPEED_QUALITY_FLOOR 0.45f
 
+/* 元素区速度限幅。 */
+#define TRACK_CROSS_SPEED_SCALE 0.72f
+#define TRACK_RING_SPEED_SCALE 0.60f
+
+/* -------------------------
+ * 十字 / 环岛 图像判定阈值
+ * ------------------------- */
+#define TRACK_CROSS_BOTH_LOST_MID_MIN 6
+#define TRACK_CROSS_WIDTH_DELTA_MIN 12
+#define TRACK_RING_SIDE_LOST_MID_MIN 10
+#define TRACK_RING_OTHER_SIDE_LOST_MID_MAX 4
+#define TRACK_RING_BOTH_LOST_MID_MAX 5
+#define TRACK_CORNER_SLOPE_MIN 6
+#define TRACK_CORNER_WIDTH_JUMP_MIN 10
+
+/* 元素状态机参数。 */
+#define TRACK_COUNTER_MAX 10
+#define TRACK_CROSS_ENTER_COUNT 2
+#define TRACK_RING_ENTER_COUNT 2
+#define TRACK_CROSS_HOLD_FRAMES 8
+#define TRACK_RING_HOLD_FRAMES 12
+
 /* -------------------------
  * 电机控制参数
- * -------------------------
- * 说明:
- * - 本车为“三轮无舵机”结构，方向控制通过左右驱动轮差速实现。
- * - 第三轮通常为万向轮/随动轮，不参与主动转向控制。
  * ------------------------- */
 #define MOTOR_CMD_MAX 10000
 #define MOTOR_CMD_MIN (-10000)
@@ -131,17 +151,12 @@
 #define SPEED_PID_I_LIMIT 150.0f
 #define SPEED_PID_OUT_LIMIT 7000.0f
 
-/* PID 内部增强参数 */
 #define SPEED_PID_D_FILTER_ALPHA 0.35f
 #define SPEED_PID_INTEGRAL_ENABLE_ERR_MIN 0.60f
 #define SPEED_PID_INTEGRAL_RELEASE_GAIN 0.35f
 
 /* -------------------------
  * 方向控制（模糊 PD）参数
- * -------------------------
- * 说明:
- * - 输入是图像循迹误差。
- * - 输出是左右轮差速量 differential_output。
  * ------------------------- */
 #define STEER_PD_KP_BASE 5.5f
 #define STEER_PD_KD_BASE 10.0f
