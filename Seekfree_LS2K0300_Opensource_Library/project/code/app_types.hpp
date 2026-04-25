@@ -93,8 +93,6 @@ struct track_result_t {
     uint8_t element;
     uint8_t state;
     uint8_t state_hold;
-    uint16_t state_elapsed_frames;  /* 当前状态已持续多少帧 */
-    bool timeout_exit;              /* 本帧是否刚发生超时退回 */
     bool cross_flag;
     uint8_t ring_flag;              /* 0: 无 1: 左环 2: 右环 */
 

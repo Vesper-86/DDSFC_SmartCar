@@ -11,9 +11,6 @@ struct track_internal_context_t
     uint8_t element;
     uint8_t state;
     uint8_t state_hold;
-    uint16_t state_elapsed_frames;
-    uint8_t state_cooldown;
-    bool timeout_exit;
     uint8_t cross_counter;
     uint8_t ring_left_counter;
     uint8_t ring_right_counter;
@@ -105,7 +102,6 @@ static void reset_internal_buffers(void)
     clear_point(g_ctx.right_up);
     clear_point(g_ctx.left_down);
     clear_point(g_ctx.right_down);
-    g_ctx.timeout_exit = false;
 }
 
 static int compute_roi_otsu_threshold(const frame_t &frame)
@@ -577,37 +573,6 @@ static void process_ring_right_state(void)
     }
 }
 
-static void switch_to_state(uint8_t new_state, uint8_t hold_frames)
-{
-    g_ctx.state = new_state;
-    g_ctx.state_hold = hold_frames;
-    g_ctx.state_elapsed_frames = 0;
-    g_ctx.timeout_exit = false;
-}
-
-static void force_back_to_normal(bool timeout_exit)
-{
-    g_ctx.state = TRACK_STATE_NORMAL;
-    g_ctx.state_hold = 0;
-    g_ctx.state_elapsed_frames = 0;
-    g_ctx.state_cooldown = TRACK_STATE_REENTER_COOLDOWN_FRAMES;
-    g_ctx.timeout_exit = timeout_exit;
-    g_ctx.cross_counter = 0;
-    g_ctx.ring_left_counter = 0;
-    g_ctx.ring_right_counter = 0;
-}
-
-static uint16_t state_timeout_limit(uint8_t state)
-{
-    switch (state)
-    {
-    case TRACK_STATE_CROSS:      return TRACK_CROSS_TIMEOUT_FRAMES;
-    case TRACK_STATE_RING_LEFT:
-    case TRACK_STATE_RING_RIGHT: return TRACK_RING_TIMEOUT_FRAMES;
-    default:                     return 0;
-    }
-}
-
 static void update_track_state(void)
 {
     if (g_cross_flag) {
@@ -628,39 +593,23 @@ static void update_track_state(void)
         --g_ctx.ring_right_counter;
     }
 
-    g_ctx.timeout_exit = false;
-    if (g_ctx.state_cooldown > 0)
-    {
-        --g_ctx.state_cooldown;
-    }
-
-    if (g_ctx.state != TRACK_STATE_NORMAL)
-    {
-        ++g_ctx.state_elapsed_frames;
-        const uint16_t timeout_limit = state_timeout_limit(g_ctx.state);
-        if (timeout_limit > 0 && g_ctx.state_elapsed_frames >= timeout_limit)
-        {
-            force_back_to_normal(true);
-        }
-    }
-
     switch (g_ctx.state)
     {
     case TRACK_STATE_NORMAL:
-        if (g_ctx.state_cooldown == 0)
+        if (g_ctx.cross_counter >= TRACK_CROSS_ENTER_COUNT)
         {
-            if (g_ctx.cross_counter >= TRACK_CROSS_ENTER_COUNT)
-            {
-                switch_to_state(TRACK_STATE_CROSS, TRACK_CROSS_HOLD_FRAMES);
-            }
-            else if (g_ctx.ring_left_counter >= TRACK_RING_ENTER_COUNT)
-            {
-                switch_to_state(TRACK_STATE_RING_LEFT, TRACK_RING_HOLD_FRAMES);
-            }
-            else if (g_ctx.ring_right_counter >= TRACK_RING_ENTER_COUNT)
-            {
-                switch_to_state(TRACK_STATE_RING_RIGHT, TRACK_RING_HOLD_FRAMES);
-            }
+            g_ctx.state = TRACK_STATE_CROSS;
+            g_ctx.state_hold = TRACK_CROSS_HOLD_FRAMES;
+        }
+        else if (g_ctx.ring_left_counter >= TRACK_RING_ENTER_COUNT)
+        {
+            g_ctx.state = TRACK_STATE_RING_LEFT;
+            g_ctx.state_hold = TRACK_RING_HOLD_FRAMES;
+        }
+        else if (g_ctx.ring_right_counter >= TRACK_RING_ENTER_COUNT)
+        {
+            g_ctx.state = TRACK_STATE_RING_RIGHT;
+            g_ctx.state_hold = TRACK_RING_HOLD_FRAMES;
         }
         break;
 
@@ -668,7 +617,7 @@ static void update_track_state(void)
         if (g_ctx.state_hold > 0) --g_ctx.state_hold;
         if (g_ctx.state_hold == 0 && g_ctx.cross_counter == 0)
         {
-            force_back_to_normal(false);
+            g_ctx.state = TRACK_STATE_NORMAL;
         }
         break;
 
@@ -676,7 +625,7 @@ static void update_track_state(void)
         if (g_ctx.state_hold > 0) --g_ctx.state_hold;
         if (g_ctx.state_hold == 0 && g_ctx.ring_left_counter == 0)
         {
-            force_back_to_normal(false);
+            g_ctx.state = TRACK_STATE_NORMAL;
         }
         break;
 
@@ -684,12 +633,13 @@ static void update_track_state(void)
         if (g_ctx.state_hold > 0) --g_ctx.state_hold;
         if (g_ctx.state_hold == 0 && g_ctx.ring_right_counter == 0)
         {
-            force_back_to_normal(false);
+            g_ctx.state = TRACK_STATE_NORMAL;
         }
         break;
 
     default:
-        force_back_to_normal(false);
+        g_ctx.state = TRACK_STATE_NORMAL;
+        g_ctx.state_hold = 0;
         break;
     }
 
@@ -862,8 +812,6 @@ static void fill_track_samples(track_result_t &track_result)
     track_result.element = g_ctx.element;
     track_result.state = g_ctx.state;
     track_result.state_hold = g_ctx.state_hold;
-    track_result.state_elapsed_frames = g_ctx.state_elapsed_frames;
-    track_result.timeout_exit = g_ctx.timeout_exit;
     g_lane_width_est = g_lane_width_est * (1.0f - TRACK_WIDTH_FILTER_ALPHA) +
                        static_cast<float>(g_ctx.road_width_base) * TRACK_WIDTH_FILTER_ALPHA;
 }
@@ -876,8 +824,6 @@ static void export_invalid_result(track_result_t &track_result, uint64_t timesta
     track_result.element = TRACK_ELEMENT_NONE;
     track_result.state = TRACK_STATE_NORMAL;
     track_result.state_hold = 0;
-    track_result.state_elapsed_frames = 0;
-    track_result.timeout_exit = false;
     track_result.cross_flag = false;
     track_result.ring_flag = 0;
     track_result.curvature_hint = g_curvature_hint;
@@ -904,16 +850,10 @@ void line_track_init(track_result_t &track_result)
     track_result.lost = true;
     track_result.element = TRACK_ELEMENT_NONE;
     track_result.state = TRACK_STATE_NORMAL;
-    track_result.state_elapsed_frames = 0;
-    track_result.timeout_exit = false;
 
     std::memset(&g_ctx, 0, sizeof(g_ctx));
     g_ctx.element = TRACK_ELEMENT_NONE;
     g_ctx.state = TRACK_STATE_NORMAL;
-    g_ctx.state_hold = 0;
-    g_ctx.state_elapsed_frames = 0;
-    g_ctx.state_cooldown = 0;
-    g_ctx.timeout_exit = false;
     g_final_mid_line = TRACK_CENTER_X;
     g_last_mid_line = TRACK_CENTER_X;
     g_lane_width_est = static_cast<float>(TRACK_DEFAULT_WIDTH);
@@ -961,20 +901,6 @@ void line_track_process(const frame_t &frame, track_result_t &track_result)
     track_result.timestamp_ms = frame.timestamp_ms;
 }
 
-float line_track_state_base_speed(const track_result_t &track_result)
-{
-    switch (track_result.state)
-    {
-    case TRACK_STATE_CROSS:
-        return MOTOR_BASE_SPEED_CROSS;
-    case TRACK_STATE_RING_LEFT:
-    case TRACK_STATE_RING_RIGHT:
-        return MOTOR_BASE_SPEED_RING;
-    default:
-        return MOTOR_BASE_SPEED_NORMAL;
-    }
-}
-
 float line_track_compute_speed_scale(const track_result_t &track_result)
 {
     const float abs_error = absf(track_result.error_filtered);
@@ -996,6 +922,13 @@ float line_track_compute_speed_scale(const track_result_t &track_result)
         (1.0f - TRACK_SPEED_QUALITY_FLOOR) * clampf(track_result.quality_hint, 0.0f, 1.0f);
 
     float final_scale = error_scale * (1.0f - curvature_penalty) * quality_scale;
+
+    if (track_result.state == TRACK_STATE_CROSS) {
+        final_scale = clampf(final_scale, 0.20f, TRACK_CROSS_SPEED_SCALE);
+    } else if (track_result.state == TRACK_STATE_RING_LEFT ||
+               track_result.state == TRACK_STATE_RING_RIGHT) {
+        final_scale = clampf(final_scale, 0.20f, TRACK_RING_SPEED_SCALE);
+    }
 
     if (!track_result.valid || track_result.lost) {
         final_scale = 0.20f;

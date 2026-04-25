@@ -90,20 +90,3 @@ make -j
 ```
 
 > 前提仍然是你本机 / 板端已经有逐飞 LS2K0300 相关 SDK 与底层库。
-
-
-## 这次新加的两个关键能力
-
-### 1) 元素区超时退出
-- `TRACK_CROSS_TIMEOUT_FRAMES`
-- `TRACK_RING_TIMEOUT_FRAMES`
-- `TRACK_STATE_REENTER_COOLDOWN_FRAMES`
-
-作用：如果十字或环岛状态持续太久还没恢复，就强制退回 `NORMAL`，并给一小段冷却，防止立刻重复误触发。
-
-### 2) 三档基础速度
-- `MOTOR_BASE_SPEED_NORMAL`
-- `MOTOR_BASE_SPEED_CROSS`
-- `MOTOR_BASE_SPEED_RING`
-
-作用：普通循迹、十字、环岛各自一档速度；同时还会叠加图像误差 / 曲率 / 质量得到的动态减速系数。

@@ -133,3 +133,45 @@ void IpsStatusView::show_status(const char *line1, const char *line2, const char
     ips_.show_string(0, 16, (char *)line2);
     ips_.show_string(0, 32, (char *)line3);
 }
+
+/*
+ * show_image_status()
+ * ---------------------------------------------------------------------------
+ * IPS200 同时显示图像和状态文字：
+ * - 图像固定显示在上半区；
+ * - 文字固定显示在下半区；
+ * - 每次只清理文字区，不整屏 full，避免把刚显示的图像擦掉。
+ */
+void IpsStatusView::show_image_status(const frame_t &frame,
+                                      const char *line1,
+                                      const char *line2,
+                                      const char *line3)
+{
+#if IPS_IMAGE_ENABLE
+    if (frame.valid && frame.gray != nullptr && frame.width > 0 && frame.height > 0)
+    {
+        ips_.show_gray_image(IPS_IMAGE_X,
+                             IPS_IMAGE_Y,
+                             frame.gray,
+                             static_cast<uint16>(frame.width),
+                             static_cast<uint16>(frame.height),
+                             IPS_IMAGE_W,
+                             IPS_IMAGE_H,
+                             IPS_IMAGE_THRESHOLD);
+    }
+
+    for (uint16 y = IPS_TEXT_Y; y < (IPS_TEXT_Y + IPS_TEXT_AREA_H); ++y)
+    {
+        for (uint16 x = IPS_TEXT_X; x < (IPS_TEXT_X + IPS_TEXT_AREA_W); ++x)
+        {
+            ips_.draw_point(x, y, RGB565_BLACK);
+        }
+    }
+
+    ips_.show_string(IPS_TEXT_X, IPS_TEXT_Y, (char *)line1);
+    ips_.show_string(IPS_TEXT_X, IPS_TEXT_Y + IPS_TEXT_LINE_H, (char *)line2);
+    ips_.show_string(IPS_TEXT_X, IPS_TEXT_Y + 2 * IPS_TEXT_LINE_H, (char *)line3);
+#else
+    show_status(line1, line2, line3);
+#endif
+}

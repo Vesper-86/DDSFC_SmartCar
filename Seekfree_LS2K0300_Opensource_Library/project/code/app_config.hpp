@@ -6,10 +6,9 @@
  * 文件用途: 本工程全部可调宏参数的统一入口
  *
  * 当前版本重点:
- * 1. 保留基础循迹 + 差速控制主链；
- * 2. 增加十字识别 / 环岛识别 / 补线状态机；
- * 3. 为十字 / 环岛补上“超时退出”保护；
- * 4. 为普通 / 十字 / 环岛分别配置独立目标速度。
+ * 1. 修正 UVC 实际输出 160x120 与工程原 320x240 不一致的问题；
+ * 2. TCP 图传按真实 160x120 发送，降低带宽并避免花屏 / buffer full；
+ * 3. IPS200 上半区显示图像，下半区显示数据，避免图像与状态文字互相覆盖。
  * ============================================================================
  */
 
@@ -17,7 +16,7 @@
  * 工程基本信息
  * ------------------------- */
 #define APP_NAME "DDSFC_ThreeWheel_NoServo_CrossRing"
-#define APP_VERSION "4.1.0"
+#define APP_VERSION "4.1.0_tcp160_ips_image"
 
 /* -------------------------
  * 功能开关
@@ -33,7 +32,7 @@
 #define TRACK_PERIOD_MS 20
 #define UART_PERIOD_MS 10
 #define DISPLAY_PERIOD_MS 100
-#define TCP_SEND_PERIOD_MS 120
+#define TCP_SEND_PERIOD_MS 150
 #define TCP_ASSISTANT_POLL_PERIOD_MS 5
 
 /* -------------------------
@@ -44,17 +43,45 @@
 
 /* -------------------------
  * UVC 摄像头参数
- * ------------------------- */
+ * -------------------------
+ * 说明：当前逐飞 UVC 驱动头文件里定义的实际输出是 UVC_WIDTH x UVC_HEIGHT，
+ * 也就是 160 x 120。这里固定为 160x120，和当前驱动输出保持一致，避免再出现 320x240 越界拷贝。
+ */
 #define CAM_DEV_PATH "/dev/video0"
-#define CAM_WIDTH 320
-#define CAM_HEIGHT 240
-#define CAM_FPS 60
+#define CAM_WIDTH 160
+#define CAM_HEIGHT 120
+#define CAM_FPS 180
 
 /* -------------------------
  * 图传参数
  * ------------------------- */
-#define TCP_SERVER_IP "10.190.147.185"
+#define TCP_SERVER_IP "10.124.199.185"
 #define TCP_SERVER_PORT 8086
+
+/*
+ * TCP 图传分辨率。
+ * 逐飞助手收到的宽高必须和发送缓存真实尺寸一致。
+ */
+#define TCP_IMAGE_WIDTH  CAM_WIDTH
+#define TCP_IMAGE_HEIGHT CAM_HEIGHT
+
+/* -------------------------
+ * IPS200 图像显示参数
+ * -------------------------
+ * 屏幕有效横向 240 像素，160x120 灰度图放在上方；
+ * 状态文字从 y=128 开始显示，避免覆盖图像。
+ */
+#define IPS_IMAGE_ENABLE 1
+#define IPS_IMAGE_X 0
+#define IPS_IMAGE_Y 0
+#define IPS_IMAGE_W 160
+#define IPS_IMAGE_H 120
+#define IPS_TEXT_X 0
+#define IPS_TEXT_Y 128
+#define IPS_TEXT_LINE_H 16
+#define IPS_TEXT_AREA_W 240
+#define IPS_TEXT_AREA_H 56
+#define IPS_IMAGE_THRESHOLD 0
 
 /* -------------------------
  * 图传叠加边界类型
@@ -64,16 +91,16 @@
  * 4: 只发边界不发底图
  * ------------------------- */
 #define INCLUDE_BOUNDARY_TYPE 0
-#define BOUNDARY_NUM (CAM_HEIGHT * 2)
+#define BOUNDARY_NUM (TCP_IMAGE_HEIGHT * 2)
 
 /* -------------------------
- * 基础循迹参数
+ * 基础循迹参数（160x120 版）
  * ------------------------- */
 #define TRACK_SCAN_LINES 6
-#define TRACK_ROI_Y0 130
-#define TRACK_ROI_Y1 235
-#define TRACK_TOP_LINE 8
-#define TRACK_SEARCH_FINISH_LINE 30
+#define TRACK_ROI_Y0 55
+#define TRACK_ROI_Y1 116
+#define TRACK_TOP_LINE 4
+#define TRACK_SEARCH_FINISH_LINE 15
 
 /* 自适应阈值基础值与限幅。 */
 #define TRACK_BIN_THRESHOLD 100
@@ -88,12 +115,12 @@
 #define TRACK_VALID_RATIO_MIN 0.34f
 
 /* 边界搜索与赛道宽度约束。 */
-#define TRACK_LOCAL_SEARCH_MARGIN 40
-#define TRACK_SEED_SEARCH_HALF_WIDTH 72
-#define TRACK_MIN_SEARCH_HALF 18
-#define TRACK_MIN_LANE_WIDTH 26
-#define TRACK_MAX_LANE_WIDTH 220
-#define TRACK_DEFAULT_WIDTH 70
+#define TRACK_LOCAL_SEARCH_MARGIN 22
+#define TRACK_SEED_SEARCH_HALF_WIDTH 36
+#define TRACK_MIN_SEARCH_HALF 10
+#define TRACK_MIN_LANE_WIDTH 13
+#define TRACK_MAX_LANE_WIDTH 110
+#define TRACK_DEFAULT_WIDTH 35
 #define TRACK_EDGE_GRAD_MIN 8
 #define TRACK_WIDTH_FILTER_ALPHA 0.25f
 
@@ -102,10 +129,25 @@
 #define TRACK_SMOOTH_ALPHA_DEN 10
 
 /* 根据偏差大小自动降速。 */
-#define TRACK_SLOWDOWN_ERROR 35.0f
-#define TRACK_BRAKE_ERROR 60.0f
-#define TRACK_SPEED_CURVATURE_SLOWDOWN 18.0f
+#define TRACK_SLOWDOWN_ERROR 18.0f
+#define TRACK_BRAKE_ERROR 30.0f
+#define TRACK_SPEED_CURVATURE_SLOWDOWN 9.0f
 #define TRACK_SPEED_QUALITY_FLOOR 0.45f
+
+/* 元素区速度限幅。 */
+#define TRACK_CROSS_SPEED_SCALE 0.72f
+#define TRACK_RING_SPEED_SCALE 0.60f
+
+/* -------------------------
+ * 十字 / 环岛 图像判定阈值（160x120 版）
+ * ------------------------- */
+#define TRACK_CROSS_BOTH_LOST_MID_MIN 6
+#define TRACK_CROSS_WIDTH_DELTA_MIN 6
+#define TRACK_RING_SIDE_LOST_MID_MIN 10
+#define TRACK_RING_OTHER_SIDE_LOST_MID_MAX 4
+#define TRACK_RING_BOTH_LOST_MID_MAX 5
+#define TRACK_CORNER_SLOPE_MIN 3
+#define TRACK_CORNER_WIDTH_JUMP_MIN 5
 
 /* 元素状态机参数。 */
 #define TRACK_COUNTER_MAX 10
@@ -114,48 +156,12 @@
 #define TRACK_CROSS_HOLD_FRAMES 8
 #define TRACK_RING_HOLD_FRAMES 12
 
-/*
- * 元素区超时退出保护。
- * 说明:
- * - TRACK_PERIOD_MS 默认是 20ms。
- * - 例如 45 帧大约等于 900ms。
- * - 若元素区卡住，超过这个时间会强制退回 NORMAL。
- */
-#define TRACK_CROSS_TIMEOUT_FRAMES 45
-#define TRACK_RING_TIMEOUT_FRAMES 90
-#define TRACK_STATE_REENTER_COOLDOWN_FRAMES 6
-
-/* -------------------------
- * 十字 / 环岛 图像判定阈值
- * ------------------------- */
-#define TRACK_CROSS_BOTH_LOST_MID_MIN 6
-#define TRACK_CROSS_WIDTH_DELTA_MIN 12
-#define TRACK_RING_SIDE_LOST_MID_MIN 10
-#define TRACK_RING_OTHER_SIDE_LOST_MID_MAX 4
-#define TRACK_RING_BOTH_LOST_MID_MAX 5
-#define TRACK_CORNER_SLOPE_MIN 6
-#define TRACK_CORNER_WIDTH_JUMP_MIN 10
-
 /* -------------------------
  * 电机控制参数
  * ------------------------- */
 #define MOTOR_CMD_MAX 10000
 #define MOTOR_CMD_MIN (-10000)
-
-/*
- * 三档目标速度。
- * 说明:
- * - NORMAL: 普通直道 / 弯道的基础目标速度。
- * - CROSS : 十字区主动降一档，避免冲飞。
- * - RING  : 环岛再降一档，优先保证可控性。
- */
-#define MOTOR_BASE_SPEED_NORMAL 240.0f
-#define MOTOR_BASE_SPEED_CROSS  180.0f
-#define MOTOR_BASE_SPEED_RING   150.0f
-
-/* 兼容旧代码中对 MOTOR_BASE_SPEED 的引用。 */
-#define MOTOR_BASE_SPEED MOTOR_BASE_SPEED_NORMAL
-
+#define MOTOR_BASE_SPEED 240.0f
 #define MOTOR_TURN_SPEED_LIMIT 360.0f
 #define MOTOR_START_SPEED 0.0f
 #define MOTOR_DEADZONE_DUTY 380
@@ -184,8 +190,8 @@
 #define STEER_PD_KD_BASE 10.0f
 #define STEER_PD_KP_FUZZY 1.0f
 #define STEER_PD_KD_FUZZY 5.0f
-#define STEER_PD_ERR_MAX 120.0f
-#define STEER_PD_DERR_MAX 40.0f
+#define STEER_PD_ERR_MAX 60.0f
+#define STEER_PD_DERR_MAX 20.0f
 #define DIFF_OUT_LIMIT 120.0f
 
 /* -------------------------

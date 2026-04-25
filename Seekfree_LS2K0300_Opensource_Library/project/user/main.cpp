@@ -20,8 +20,7 @@
  * 当前版本在基础差速循迹上，增加了：
  * 1. 十字图像识别与补线；
  * 2. 左 / 右环岛图像识别与补线；
- * 3. 十字 / 环岛增加超时退出，避免卡状态；
- * 4. 普通 / 十字 / 环岛分别使用三档基础速度。
+ * 3. 屏幕直接显示当前元素状态，方便现场调参。
  * ============================================================================
  */
 
@@ -31,14 +30,14 @@ static zf_driver_encoder g_encoder_left(ENCODER_LEFT_PATH);
 static zf_driver_encoder g_encoder_right(ENCODER_RIGHT_PATH);
 static zf_driver_tcp_client g_tcp_client;
 
-static uint8 g_image_copy[CAM_HEIGHT][CAM_WIDTH];
+static uint8 g_tcp_image_copy[TCP_IMAGE_HEIGHT][TCP_IMAGE_WIDTH];
 static volatile int g_tcp_send_guard = 0;
 static int g_tcp_enabled = 0;
 
 static uint8 g_xy_x1_boundary[BOUNDARY_NUM], g_xy_x2_boundary[BOUNDARY_NUM], g_xy_x3_boundary[BOUNDARY_NUM];
 static uint8 g_xy_y1_boundary[BOUNDARY_NUM], g_xy_y2_boundary[BOUNDARY_NUM], g_xy_y3_boundary[BOUNDARY_NUM];
-static uint8 g_x1_boundary[CAM_HEIGHT], g_x2_boundary[CAM_HEIGHT], g_x3_boundary[CAM_HEIGHT];
-static uint8 g_y1_boundary[CAM_WIDTH], g_y2_boundary[CAM_WIDTH], g_y3_boundary[CAM_WIDTH];
+static uint8 g_x1_boundary[TCP_IMAGE_HEIGHT], g_x2_boundary[TCP_IMAGE_HEIGHT], g_x3_boundary[TCP_IMAGE_HEIGHT];
+static uint8 g_y1_boundary[TCP_IMAGE_WIDTH], g_y2_boundary[TCP_IMAGE_WIDTH], g_y3_boundary[TCP_IMAGE_WIDTH];
 
 static void on_sigint(int)
 {
@@ -60,69 +59,69 @@ static void assistant_camera_config(void)
 #if (0 == INCLUDE_BOUNDARY_TYPE)
     seekfree_assistant_camera_information_config(
         SEEKFREE_ASSISTANT_MT9V03X,
-        g_image_copy[0],
-        CAM_WIDTH,
-        CAM_HEIGHT);
+        g_tcp_image_copy[0],
+        TCP_IMAGE_WIDTH,
+        TCP_IMAGE_HEIGHT);
 #elif (1 == INCLUDE_BOUNDARY_TYPE)
-    for (int32 i = 0; i < CAM_HEIGHT; i++)
+    for (int32 i = 0; i < TCP_IMAGE_HEIGHT; i++)
     {
-        g_x1_boundary[i] = 50 - (50 - 20) * i / CAM_HEIGHT;
-        g_x2_boundary[i] = CAM_WIDTH / 2;
-        g_x3_boundary[i] = 70 + (148 - 70) * i / CAM_HEIGHT;
+        g_x1_boundary[i] = 50 - (50 - 20) * i / TCP_IMAGE_HEIGHT;
+        g_x2_boundary[i] = TCP_IMAGE_WIDTH / 2;
+        g_x3_boundary[i] = 70 + (148 - 70) * i / TCP_IMAGE_HEIGHT;
     }
 
     seekfree_assistant_camera_information_config(
         SEEKFREE_ASSISTANT_MT9V03X,
-        g_image_copy[0],
-        CAM_WIDTH,
-        CAM_HEIGHT);
+        g_tcp_image_copy[0],
+        TCP_IMAGE_WIDTH,
+        TCP_IMAGE_HEIGHT);
     seekfree_assistant_camera_boundary_config(
         X_BOUNDARY,
-        CAM_HEIGHT,
+        TCP_IMAGE_HEIGHT,
         g_x1_boundary, g_x2_boundary, g_x3_boundary,
         NULL, NULL, NULL);
 #elif (2 == INCLUDE_BOUNDARY_TYPE)
-    for (int32 i = 0; i < CAM_WIDTH; i++)
+    for (int32 i = 0; i < TCP_IMAGE_WIDTH; i++)
     {
-        g_y1_boundary[i] = 50 - (50 - 20) * i / CAM_HEIGHT;
-        g_y2_boundary[i] = CAM_WIDTH / 2;
-        g_y3_boundary[i] = 78 + (78 - 58) * i / CAM_HEIGHT;
+        g_y1_boundary[i] = 50 - (50 - 20) * i / TCP_IMAGE_HEIGHT;
+        g_y2_boundary[i] = TCP_IMAGE_WIDTH / 2;
+        g_y3_boundary[i] = 78 + (78 - 58) * i / TCP_IMAGE_HEIGHT;
     }
 
     seekfree_assistant_camera_information_config(
         SEEKFREE_ASSISTANT_MT9V03X,
-        g_image_copy[0],
-        CAM_WIDTH,
-        CAM_HEIGHT);
+        g_tcp_image_copy[0],
+        TCP_IMAGE_WIDTH,
+        TCP_IMAGE_HEIGHT);
     seekfree_assistant_camera_boundary_config(
         Y_BOUNDARY,
-        CAM_WIDTH,
+        TCP_IMAGE_WIDTH,
         NULL, NULL, NULL,
         g_y1_boundary, g_y2_boundary, g_y3_boundary);
 #elif (4 == INCLUDE_BOUNDARY_TYPE)
-    for (int32 i = 0; i < CAM_HEIGHT; i++)
+    for (int32 i = 0; i < TCP_IMAGE_HEIGHT; i++)
     {
-        g_x1_boundary[i] = 70 - (70 - 20) * i / CAM_HEIGHT;
-        g_x2_boundary[i] = CAM_WIDTH / 2;
-        g_x3_boundary[i] = 80 + (159 - 80) * i / CAM_HEIGHT;
+        g_x1_boundary[i] = 70 - (70 - 20) * i / TCP_IMAGE_HEIGHT;
+        g_x2_boundary[i] = TCP_IMAGE_WIDTH / 2;
+        g_x3_boundary[i] = 80 + (159 - 80) * i / TCP_IMAGE_HEIGHT;
     }
 
     seekfree_assistant_camera_information_config(
         SEEKFREE_ASSISTANT_MT9V03X,
         NULL,
-        CAM_WIDTH,
-        CAM_HEIGHT);
+        TCP_IMAGE_WIDTH,
+        TCP_IMAGE_HEIGHT);
     seekfree_assistant_camera_boundary_config(
         X_BOUNDARY,
-        CAM_HEIGHT,
+        TCP_IMAGE_HEIGHT,
         g_x1_boundary, g_x2_boundary, g_x3_boundary,
         NULL, NULL, NULL);
 #else
     seekfree_assistant_camera_information_config(
         SEEKFREE_ASSISTANT_MT9V03X,
-        g_image_copy[0],
-        CAM_WIDTH,
-        CAM_HEIGHT);
+        g_tcp_image_copy[0],
+        TCP_IMAGE_WIDTH,
+        TCP_IMAGE_HEIGHT);
 #endif
 
     (void)g_xy_x1_boundary;
@@ -166,13 +165,13 @@ static void tcp_send_gray_frame(const frame_t &frame)
         return;
     }
 
-    if (frame.width != CAM_WIDTH || frame.height != CAM_HEIGHT)
+    if (frame.width != TCP_IMAGE_WIDTH || frame.height != TCP_IMAGE_HEIGHT)
     {
         return;
     }
 
     g_tcp_send_guard = 1;
-    std::memcpy(g_image_copy[0], frame.gray, (size_t)CAM_WIDTH * (size_t)CAM_HEIGHT);
+    std::memcpy(g_tcp_image_copy[0], frame.gray, (size_t)TCP_IMAGE_WIDTH * (size_t)TCP_IMAGE_HEIGHT);
     seekfree_assistant_camera_send();
     g_tcp_send_guard = 0;
 }
@@ -302,8 +301,7 @@ static void update_motion_control(app_context_t &app,
         differential_output = clampf(differential_output, -DIFF_OUT_LIMIT, DIFF_OUT_LIMIT);
 
         speed_scale = line_track_compute_speed_scale(app.track);
-        const float state_base_speed = line_track_state_base_speed(app.track);
-        const float base_speed = state_base_speed * speed_scale;
+        const float base_speed = MOTOR_BASE_SPEED * speed_scale;
 
         app.motor.left_target_rps =
             clampf(base_speed - differential_output, 0.0f, MOTOR_TURN_SPEED_LIMIT) / 100.0f;
@@ -390,13 +388,17 @@ static void update_display_view(IpsStatusView &display, const app_context_t &app
 
     std::snprintf(line3,
                   sizeof(line3),
-                  "%s F:%u TO:%u SC:%0.2f",
+                  "%s C:%u R:%u SC:%0.2f",
                   line_track_element_name(app.track.element),
-                  (unsigned)app.track.state_elapsed_frames,
-                  app.track.timeout_exit ? 1U : 0U,
+                  app.track.cross_flag ? 1U : 0U,
+                  (unsigned)app.track.ring_flag,
                   app.recog.score);
 
+    #if IPS_IMAGE_ENABLE
+    display.show_image_status(app.frame, line1, line2, line3);
+#else
     display.show_status(line1, line2, line3);
+#endif
 #else
     (void)display;
     (void)app;
