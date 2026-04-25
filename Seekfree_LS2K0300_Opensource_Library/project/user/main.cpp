@@ -354,7 +354,7 @@ static void update_motion_control(app_context_t &app,
     }
 
     const bool track_ok = app.track.valid &&
-                           ((app.now_ms - app.track.timestamp_ms) <= CAMERA_TIMEOUT_MS);
+                          ((app.now_ms - app.track.timestamp_ms) <= CAMERA_TIMEOUT_MS);
 
     if (track_ok)
     {
@@ -377,13 +377,13 @@ static void update_motion_control(app_context_t &app,
         app.motor.right_target_rps = clampf(base_speed + differential_output, 0.0f, MOTOR_TURN_SPEED_LIMIT) / 100.0f;
 
         left_output_command = (int)pid_update(left_speed_pid,
-                                             app.motor.left_target_rps,
-                                             app.motor.left_speed_rps,
-                                             CONTROL_PERIOD_MS / 1000.0f);
-        right_output_command = (int)pid_update(right_speed_pid,
-                                              app.motor.right_target_rps,
-                                              app.motor.right_speed_rps,
+                                              app.motor.left_target_rps,
+                                              app.motor.left_speed_rps,
                                               CONTROL_PERIOD_MS / 1000.0f);
+        right_output_command = (int)pid_update(right_speed_pid,
+                                               app.motor.right_target_rps,
+                                               app.motor.right_speed_rps,
+                                               CONTROL_PERIOD_MS / 1000.0f);
 #else
         const int base_pwm = (int)(OPEN_LOOP_BASE_PWM * speed_scale);
         const int diff_pwm = (int)(differential_output);

@@ -11,6 +11,13 @@
  * ============================================================================
  */
 
+#define TCP_IMAGE_HEIGHT 120
+
+#define IPS_IMAGE_X 0
+#define IPS_IMAGE_Y 0
+#define IPS_IMAGE_W TCP_IMAGE_WIDTH
+#define IPS_IMAGE_H TCP_IMAGE_HEIGHT
+
 /* -------------------------
  * 工程基本信息
  * ------------------------- */
@@ -96,6 +103,9 @@
  * 4: 只发边界不发底图
  */
 #define INCLUDE_BOUNDARY_TYPE 3
+
+
+
 #define BOUNDARY_NUM (TCP_IMAGE_HEIGHT * 2) /* 边界点数量 */
 
 /* 叠加显示配置 */
