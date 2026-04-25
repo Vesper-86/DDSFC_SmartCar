@@ -1,6 +1,16 @@
 #include "seekfree_hal.hpp"
 #include <cstring>
 
+#ifndef RGB565_RED
+#define RGB565_RED 0xF800
+#endif
+#ifndef RGB565_GREEN
+#define RGB565_GREEN 0x07E0
+#endif
+#ifndef RGB565_BLUE
+#define RGB565_BLUE 0x001F
+#endif
+
 /*
  * ============================================================================
  * 文件名称: seekfree_hal.cpp
@@ -142,7 +152,88 @@ void IpsStatusView::show_status(const char *line1, const char *line2, const char
  * - 文字固定显示在下半区；
  * - 每次只清理文字区，不整屏 full，避免把刚显示的图像擦掉。
  */
+namespace
+{
+static int ips_compute_scan_y(int scan_index, int image_height)
+{
+    const int roi_height = TRACK_ROI_Y1 - TRACK_ROI_Y0;
+    int scan_step = (roi_height > 0) ? (roi_height / TRACK_SCAN_LINES) : 1;
+    if (scan_step <= 0)
+    {
+        scan_step = 1;
+    }
+
+    int y = TRACK_ROI_Y1 - 1 - scan_index * scan_step;
+    if (y < 0) y = 0;
+    if (y >= image_height) y = image_height - 1;
+    return y;
+}
+
+static void ips_draw_safe_point(zf_device_ips200 &ips, int x, int y, uint16 color)
+{
+    if (x < 0 || x >= IPS_IMAGE_W || y < 0 || y >= IPS_IMAGE_H)
+    {
+        return;
+    }
+    ips.draw_point(static_cast<uint16>(x + IPS_IMAGE_X), static_cast<uint16>(y + IPS_IMAGE_Y), color);
+}
+
+static void ips_draw_cross(zf_device_ips200 &ips, int x, int y, uint16 color)
+{
+#if TRACK_OVERLAY_ENABLE
+    const int half = TRACK_OVERLAY_POINT_HALF_SIZE;
+    for (int dy = -half; dy <= half; ++dy)
+    {
+        ips_draw_safe_point(ips, x, y + dy, color);
+    }
+    for (int dx = -half; dx <= half; ++dx)
+    {
+        ips_draw_safe_point(ips, x + dx, y, color);
+    }
+#else
+    (void)ips; (void)x; (void)y; (void)color;
+#endif
+}
+
+static void ips_draw_curve(zf_device_ips200 &ips, const int *sample_y, const int *sample_x, int sample_count, uint16 color)
+{
+#if TRACK_OVERLAY_ENABLE
+    if (sample_count <= 0)
+    {
+        return;
+    }
+
+    for (int i = 0; i < sample_count - 1; ++i)
+    {
+        const int y0 = sample_y[i];
+        const int y1 = sample_y[i + 1];
+        const int x0 = sample_x[i];
+        const int x1 = sample_x[i + 1];
+        const int dy = y1 - y0;
+
+        if (dy == 0)
+        {
+            ips_draw_safe_point(ips, x0, y0, color);
+            continue;
+        }
+
+        const int y_begin = (y0 < y1) ? y0 : y1;
+        const int y_end = (y0 < y1) ? y1 : y0;
+        for (int y = y_begin; y <= y_end; ++y)
+        {
+            const float t = static_cast<float>(y - y0) / static_cast<float>(dy);
+            const int x = static_cast<int>(x0 + (x1 - x0) * t + ((x1 >= x0) ? 0.5f : -0.5f));
+            ips_draw_safe_point(ips, x, y, color);
+        }
+    }
+#else
+    (void)ips; (void)sample_y; (void)sample_x; (void)sample_count; (void)color;
+#endif
+}
+}
+
 void IpsStatusView::show_image_status(const frame_t &frame,
+                                      const track_result_t &track,
                                       const char *line1,
                                       const char *line2,
                                       const char *line3)
@@ -158,6 +249,37 @@ void IpsStatusView::show_image_status(const frame_t &frame,
                              IPS_IMAGE_W,
                              IPS_IMAGE_H,
                              IPS_IMAGE_THRESHOLD);
+
+#if TRACK_OVERLAY_ENABLE
+        if (track.valid)
+        {
+            int sample_y[CAM_HEIGHT] = {0};
+            int sample_left[CAM_HEIGHT] = {0};
+            int sample_center[CAM_HEIGHT] = {0};
+            int sample_right[CAM_HEIGHT] = {0};
+            int sample_count = 0;
+
+            for (int y = TRACK_TOP_LINE; y < frame.height && y < CAM_HEIGHT; ++y)
+            {
+                sample_y[sample_count] = y;
+                sample_left[sample_count] = clampi(track.full_left[y], 0, frame.width - 1);
+                sample_center[sample_count] = clampi(track.full_center[y], 0, frame.width - 1);
+                sample_right[sample_count] = clampi(track.full_right[y], 0, frame.width - 1);
+                ++sample_count;
+            }
+
+            ips_draw_curve(ips_, sample_y, sample_left, sample_count, RGB565_RED);
+            ips_draw_curve(ips_, sample_y, sample_center, sample_count, RGB565_GREEN);
+            ips_draw_curve(ips_, sample_y, sample_right, sample_count, RGB565_BLUE);
+
+            for (int i = 0; i < sample_count; i += 8)
+            {
+                ips_draw_cross(ips_, sample_left[i], sample_y[i], RGB565_RED);
+                ips_draw_cross(ips_, sample_center[i], sample_y[i], RGB565_GREEN);
+                ips_draw_cross(ips_, sample_right[i], sample_y[i], RGB565_BLUE);
+            }
+        }
+#endif
     }
 
     for (uint16 y = IPS_TEXT_Y; y < (IPS_TEXT_Y + IPS_TEXT_AREA_H); ++y)
@@ -172,6 +294,7 @@ void IpsStatusView::show_image_status(const frame_t &frame,
     ips_.show_string(IPS_TEXT_X, IPS_TEXT_Y + IPS_TEXT_LINE_H, (char *)line2);
     ips_.show_string(IPS_TEXT_X, IPS_TEXT_Y + 2 * IPS_TEXT_LINE_H, (char *)line3);
 #else
+    (void)track;
     show_status(line1, line2, line3);
 #endif
 }

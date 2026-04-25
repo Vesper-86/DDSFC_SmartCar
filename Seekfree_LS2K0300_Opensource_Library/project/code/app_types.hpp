@@ -83,6 +83,18 @@ struct track_result_t {
     int right_edge[TRACK_SCAN_LINES];
     int center[TRACK_SCAN_LINES];
 
+    /* 整幅图逐行边界，供 TCP / IPS 叠加显示和调试使用。 */
+    int full_left[CAM_HEIGHT];
+    int full_right[CAM_HEIGHT];
+    int full_center[CAM_HEIGHT];
+    uint8_t full_left_lost[CAM_HEIGHT];
+    uint8_t full_right_lost[CAM_HEIGHT];
+
+    int seed_column;
+    int search_top_y;
+    uint16_t state_elapsed_frames;
+    bool timeout_exit;
+
     float center_avg;
     float error;
     float error_filtered;

@@ -16,7 +16,7 @@
  * 工程基本信息
  * ------------------------- */
 #define APP_NAME "DDSFC_ThreeWheel_NoServo_CrossRing"
-#define APP_VERSION "4.1.0_tcp160_ips_image"
+#define APP_VERSION "4.3.0_image_track_core"
 
 /* -------------------------
  * 功能开关
@@ -90,8 +90,12 @@
  * 2: 发 Y_BOUNDARY
  * 4: 只发边界不发底图
  * ------------------------- */
-#define INCLUDE_BOUNDARY_TYPE 0
+#define INCLUDE_BOUNDARY_TYPE 1
 #define BOUNDARY_NUM (TCP_IMAGE_HEIGHT * 2)
+
+/* TCP 与 IPS 叠加显示开关。 */
+#define TRACK_OVERLAY_ENABLE 1
+#define TRACK_OVERLAY_POINT_HALF_SIZE 1
 
 /* -------------------------
  * 基础循迹参数（160x120 版）
@@ -107,6 +111,10 @@
 #define TRACK_BINARY_MIN 40
 #define TRACK_BINARY_MAX 180
 #define TRACK_OTSU_SAMPLE_STRIDE 2
+#define TRACK_BINARY_DENOISE_ENABLE 1
+#define TRACK_MIN_WHITE_COLUMN_LEN 10
+#define TRACK_SEARCH_STOP_MARGIN 8
+#define TRACK_MIN_SEARCH_STOP_LINE 30
 
 /* 图像中心与误差滤波。 */
 #define TRACK_CENTER_X (CAM_WIDTH / 2)
@@ -155,6 +163,9 @@
 #define TRACK_RING_ENTER_COUNT 2
 #define TRACK_CROSS_HOLD_FRAMES 8
 #define TRACK_RING_HOLD_FRAMES 12
+#define TRACK_CROSS_TIMEOUT_FRAMES 45
+#define TRACK_RING_TIMEOUT_FRAMES 90
+#define TRACK_STATE_REENTER_COOLDOWN_FRAMES 6
 
 /* -------------------------
  * 电机控制参数

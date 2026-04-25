@@ -54,6 +54,100 @@ static uint32 tcp_read_wrap(uint8 *buf, uint32 len)
     return g_tcp_client.read_data(buf, len);
 }
 
+static int tcp_compute_scan_y(int scan_index, int image_height)
+{
+    const int roi_height = TRACK_ROI_Y1 - TRACK_ROI_Y0;
+    int scan_step = (roi_height > 0) ? (roi_height / TRACK_SCAN_LINES) : 1;
+    if (scan_step <= 0)
+    {
+        scan_step = 1;
+    }
+
+    int y = TRACK_ROI_Y1 - 1 - scan_index * scan_step;
+    if (y < 0) y = 0;
+    if (y >= image_height) y = image_height - 1;
+    return y;
+}
+
+static void tcp_fill_boundary_line(uint8 *dst, const int *sample_y, const int *sample_x, int sample_count, int image_height)
+{
+    if (dst == nullptr || image_height <= 0 || sample_count <= 0)
+    {
+        return;
+    }
+
+    for (int y = 0; y < image_height; ++y)
+    {
+        dst[y] = static_cast<uint8>(sample_x[0]);
+    }
+
+    for (int i = 0; i < sample_count - 1; ++i)
+    {
+        const int y0 = sample_y[i];
+        const int y1 = sample_y[i + 1];
+        const int x0 = sample_x[i];
+        const int x1 = sample_x[i + 1];
+        const int dy = y1 - y0;
+
+        if (dy == 0)
+        {
+            if (y0 >= 0 && y0 < image_height)
+            {
+                dst[y0] = static_cast<uint8>(x0);
+            }
+            continue;
+        }
+
+        const int y_begin = (y0 < y1) ? y0 : y1;
+        const int y_end = (y0 < y1) ? y1 : y0;
+        for (int y = y_begin; y <= y_end; ++y)
+        {
+            const float t = static_cast<float>(y - y0) / static_cast<float>(dy);
+            int x = static_cast<int>(x0 + (x1 - x0) * t + ((x1 >= x0) ? 0.5f : -0.5f));
+            x = clampi(x, 0, TCP_IMAGE_WIDTH - 1);
+            dst[y] = static_cast<uint8>(x);
+        }
+    }
+
+    const int last_y = sample_y[sample_count - 1];
+    const uint8 last_x = static_cast<uint8>(sample_x[sample_count - 1]);
+    for (int y = 0; y < image_height; ++y)
+    {
+        if (y > last_y)
+        {
+            dst[y] = last_x;
+        }
+    }
+}
+
+static void tcp_update_boundaries(const frame_t &frame, const track_result_t &track)
+{
+#if (1 == INCLUDE_BOUNDARY_TYPE)
+    if (frame.width != TCP_IMAGE_WIDTH || frame.height != TCP_IMAGE_HEIGHT)
+    {
+        return;
+    }
+
+    for (int y = 0; y < TCP_IMAGE_HEIGHT; ++y)
+    {
+        int left = track.valid ? track.full_left[y] : 0;
+        int center = track.valid ? track.full_center[y] : (TCP_IMAGE_WIDTH / 2);
+        int right = track.valid ? track.full_right[y] : (TCP_IMAGE_WIDTH - 1);
+
+        left = clampi(left, 0, TCP_IMAGE_WIDTH - 1);
+        center = clampi(center, 0, TCP_IMAGE_WIDTH - 1);
+        right = clampi(right, 0, TCP_IMAGE_WIDTH - 1);
+
+        g_x1_boundary[y] = static_cast<uint8>(left);
+        g_x2_boundary[y] = static_cast<uint8>(center);
+        g_x3_boundary[y] = static_cast<uint8>(right);
+    }
+#else
+    (void)frame;
+    (void)track;
+#endif
+}
+
 static void assistant_camera_config(void)
 {
 #if (0 == INCLUDE_BOUNDARY_TYPE)
@@ -63,12 +157,9 @@ static void assistant_camera_config(void)
         TCP_IMAGE_WIDTH,
         TCP_IMAGE_HEIGHT);
 #elif (1 == INCLUDE_BOUNDARY_TYPE)
-    for (int32 i = 0; i < TCP_IMAGE_HEIGHT; i++)
-    {
-        g_x1_boundary[i] = 50 - (50 - 20) * i / TCP_IMAGE_HEIGHT;
-        g_x2_boundary[i] = TCP_IMAGE_WIDTH / 2;
-        g_x3_boundary[i] = 70 + (148 - 70) * i / TCP_IMAGE_HEIGHT;
-    }
+    std::memset(g_x1_boundary, 0, sizeof(g_x1_boundary));
+    std::memset(g_x2_boundary, TCP_IMAGE_WIDTH / 2, sizeof(g_x2_boundary));
+    std::memset(g_x3_boundary, TCP_IMAGE_WIDTH - 1, sizeof(g_x3_boundary));
 
     seekfree_assistant_camera_information_config(
         SEEKFREE_ASSISTANT_MT9V03X,
@@ -99,12 +190,9 @@ static void assistant_camera_config(void)
         NULL, NULL, NULL,
         g_y1_boundary, g_y2_boundary, g_y3_boundary);
 #elif (4 == INCLUDE_BOUNDARY_TYPE)
-    for (int32 i = 0; i < TCP_IMAGE_HEIGHT; i++)
-    {
-        g_x1_boundary[i] = 70 - (70 - 20) * i / TCP_IMAGE_HEIGHT;
-        g_x2_boundary[i] = TCP_IMAGE_WIDTH / 2;
-        g_x3_boundary[i] = 80 + (159 - 80) * i / TCP_IMAGE_HEIGHT;
-    }
+    std::memset(g_x1_boundary, 0, sizeof(g_x1_boundary));
+    std::memset(g_x2_boundary, TCP_IMAGE_WIDTH / 2, sizeof(g_x2_boundary));
+    std::memset(g_x3_boundary, TCP_IMAGE_WIDTH - 1, sizeof(g_x3_boundary));
 
     seekfree_assistant_camera_information_config(
         SEEKFREE_ASSISTANT_MT9V03X,
@@ -153,7 +241,7 @@ static int init_tcp_transfer(void)
 #endif
 }
 
-static void tcp_send_gray_frame(const frame_t &frame)
+static void tcp_send_gray_frame(const frame_t &frame, const track_result_t &track)
 {
     if (!g_tcp_enabled || !frame.valid || frame.gray == nullptr)
     {
@@ -172,6 +260,7 @@ static void tcp_send_gray_frame(const frame_t &frame)
 
     g_tcp_send_guard = 1;
     std::memcpy(g_tcp_image_copy[0], frame.gray, (size_t)TCP_IMAGE_WIDTH * (size_t)TCP_IMAGE_HEIGHT);
+    tcp_update_boundaries(frame, track);
     seekfree_assistant_camera_send();
     g_tcp_send_guard = 0;
 }
@@ -395,7 +484,7 @@ static void update_display_view(IpsStatusView &display, const app_context_t &app
                   app.recog.score);
 
     #if IPS_IMAGE_ENABLE
-    display.show_image_status(app.frame, line1, line2, line3);
+    display.show_image_status(app.frame, app.track, line1, line2, line3);
 #else
     display.show_status(line1, line2, line3);
 #endif
@@ -501,7 +590,7 @@ int main()
         if ((app.now_ms - last_tcp_tick_ms) >= TCP_SEND_PERIOD_MS)
         {
             last_tcp_tick_ms = app.now_ms;
-            tcp_send_gray_frame(app.frame);
+            tcp_send_gray_frame(app.frame, app.track);
         }
 
         if ((app.now_ms - last_tcp_poll_tick_ms) >= TCP_ASSISTANT_POLL_PERIOD_MS)

@@ -72,8 +72,12 @@ public:
     /* 显示三行状态字符串。 */
     void show_status(const char *line1, const char *line2, const char *line3);
 
-    /* 显示灰度图像 + 三行状态字符串，图像区和文字区分离，避免覆盖。 */
-    void show_image_status(const frame_t &frame, const char *line1, const char *line2, const char *line3);
+    /* 显示灰度图像 + 叠加边线/中线 + 三行状态字符串。 */
+    void show_image_status(const frame_t &frame,
+                           const track_result_t &track,
+                           const char *line1,
+                           const char *line2,
+                           const char *line3);
 
 private:
     zf_device_ips200 ips_;        /* 逐飞 IPS200 设备对象 */
