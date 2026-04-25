@@ -191,10 +191,10 @@
 /* -------------------------
  * 电机控制参数
  * ------------------------- */
-#define MOTOR_CMD_MAX 10000
-#define MOTOR_CMD_MIN (-10000)
-#define MOTOR_BASE_SPEED 240.0f
-#define MOTOR_TURN_SPEED_LIMIT 360.0f
+#define MOTOR_CMD_MAX 2000
+#define MOTOR_CMD_MIN (-2000)
+#define MOTOR_BASE_SPEED 80.0f
+#define MOTOR_TURN_SPEED_LIMIT 120.0f
 #define MOTOR_START_SPEED 0.0f
 #define MOTOR_DEADZONE_DUTY 380
 
@@ -209,7 +209,7 @@
 #define SPEED_PID_KI 0.10f
 #define SPEED_PID_KD 0.08f
 #define SPEED_PID_I_LIMIT 150.0f
-#define SPEED_PID_OUT_LIMIT 7000.0f
+#define SPEED_PID_OUT_LIMIT 4000.0f
 
 #define SPEED_PID_D_FILTER_ALPHA 0.35f
 #define SPEED_PID_INTEGRAL_ENABLE_ERR_MIN 0.60f
@@ -253,15 +253,16 @@
  * ------------------------- */
 #define ENCODER_LEFT_PATH ZF_ENCODER_DIR_1
 #define ENCODER_RIGHT_PATH ZF_ENCODER_DIR_2
-#define ENCODER_LEFT_SIGN 1.0f
-#define ENCODER_RIGHT_SIGN 1.0f
+#define ENCODER_LEFT_SIGN (-1.0f)
+#define ENCODER_RIGHT_SIGN (-1.0f)
 #define ENCODER_SPEED_FILTER_ALPHA 0.35f
 #define ENCODER_COUNTS_PER_WHEEL_REV 1000.0f
 
 /* -------------------------
  * 电机输出平滑参数
  * ------------------------- */
-#define MOTOR_CMD_RAMP_STEP 350
+#define MOTOR_CMD_RAMP_STEP 150
+#define MOTOR_FINAL_OUTPUT_LIMIT 2000
 
 /* -------------------------
  * 丢线保护参数

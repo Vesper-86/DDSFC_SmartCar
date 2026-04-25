@@ -503,6 +503,9 @@ static void update_motion_control(app_context_t &app,
     left_output_command = ramp_limit_int(left_output_command, last_left_cmd, MOTOR_CMD_RAMP_STEP);
     right_output_command = ramp_limit_int(right_output_command, last_right_cmd, MOTOR_CMD_RAMP_STEP);
 
+    left_output_command = clampi(left_output_command, -MOTOR_FINAL_OUTPUT_LIMIT, MOTOR_FINAL_OUTPUT_LIMIT);
+    right_output_command = clampi(right_output_command, -MOTOR_FINAL_OUTPUT_LIMIT, MOTOR_FINAL_OUTPUT_LIMIT);
+
     last_left_cmd = left_output_command;
     last_right_cmd = right_output_command;
 
