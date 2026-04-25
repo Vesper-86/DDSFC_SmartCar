@@ -15,12 +15,13 @@
 /*
  * ============================================================================
  * 文件名称: main.cpp
- * 文件用途: 三轮智能车统一调度入口（低速稳定安全版）
+ * 文件用途: 低速稳定安全版主程序入口（完整功能版）
  *
  * 当前版本特点:
- * 1. 支持无编码器开环和有编码器闭环两种模式切换
- * 2. 默认配置低速安全版，适合调试和初学
- * 3. 保留完整TCP图传
+ * 1. 支持无编码器开环和有编码器闭环双模式切换
+ * 2. 保留完整TCP图传、完整循迹（弯道+十字+环岛）
+ * 3. 保留调试打印功能
+ * 4. 完整斜坡限幅+最终输出限幅双重保护
  * ============================================================================
  */
 
@@ -33,7 +34,7 @@
 #define MOTOR_DEBUG_PRINT_PERIOD_MS 100
 #endif
 
-/* 全局运行标志，用于响应 Ctrl+C 信号 */
+/* 全局运行标志。收到 Ctrl+C 时会被置 0。 */
 static volatile int g_app_running = 1;
 
 /* 编码器设备对象 */
@@ -43,69 +44,65 @@ static zf_driver_encoder g_encoder_right(ENCODER_RIGHT_PATH);
 /* TCP 客户端对象 */
 static zf_driver_tcp_client g_tcp_client;
 
-/* TCP图传缓存 */
+/* TCP 图像发送缓存 */
 static uint8 g_tcp_image_copy[TCP_IMAGE_HEIGHT][TCP_IMAGE_WIDTH];
+
+/* TCP 边界数组 */
+static uint8 g_xy_x1_boundary[BOUNDARY_NUM];
+static uint8 g_xy_x2_boundary[BOUNDARY_NUM];
+static uint8 g_xy_x3_boundary[BOUNDARY_NUM];
+static uint8 g_xy_y1_boundary[BOUNDARY_NUM];
+static uint8 g_xy_y2_boundary[BOUNDARY_NUM];
+static uint8 g_xy_y3_boundary[BOUNDARY_NUM];
+static uint8 g_x1_boundary[TCP_IMAGE_HEIGHT];
+static uint8 g_x2_boundary[TCP_IMAGE_HEIGHT];
+static uint8 g_x3_boundary[TCP_IMAGE_HEIGHT];
+static uint8 g_y1_boundary[TCP_IMAGE_WIDTH];
+static uint8 g_y2_boundary[TCP_IMAGE_WIDTH];
+static uint8 g_y3_boundary[TCP_IMAGE_WIDTH];
+
+/* 调试变量 */
 static volatile int g_tcp_send_guard = 0;
 static int g_tcp_enabled = 0;
-
-/* XY边界缓存 */
-static uint8 g_xy_x1_boundary[BOUNDARY_NUM], g_xy_x2_boundary[BOUNDARY_NUM], g_xy_x3_boundary[BOUNDARY_NUM];
-static uint8 g_xy_y1_boundary[BOUNDARY_NUM], g_xy_y2_boundary[BOUNDARY_NUM], g_xy_y3_boundary[BOUNDARY_NUM];
-static uint8 g_x1_boundary[TCP_IMAGE_HEIGHT], g_x2_boundary[TCP_IMAGE_HEIGHT], g_x3_boundary[TCP_IMAGE_HEIGHT];
-
-/* 电机/编码器调试变量 */
 static int16 g_dbg_left_count = 0;
 static int16 g_dbg_right_count = 0;
 static float g_dbg_left_raw_rps = 0.0f;
 static float g_dbg_right_raw_rps = 0.0f;
 
-/*
- * 函数名称: on_sigint
- * 功能描述: 响应 Ctrl+C 信号
- */
+/* SIGINT 信号处理函数 */
 static void on_sigint(int)
 {
     g_app_running = 0;
 }
 
-/*
- * 函数名称: tcp_send_wrap
- * 功能描述: TCP发送包装函数
- */
+/* TCP 发送包装函数，适配逐飞助手接口 */
 static uint32 tcp_send_wrap(const uint8 *buf, uint32 len)
 {
     return g_tcp_client.send_data(buf, len);
 }
 
-/*
- * 函数名称: tcp_read_wrap
- * 功能描述: TCP接收包装函数
- */
+/* TCP 接收包装函数，适配逐飞助手接口 */
 static uint32 tcp_read_wrap(uint8 *buf, uint32 len)
 {
     return g_tcp_client.read_data(buf, len);
 }
 
-/*
- * 函数名称: assistant_camera_config
- * 功能描述: 配置逐飞助手相机和边界
- */
-static void assistant_camera_config(void)
+/* 配置逐飞助手相机和边界 */
+static void assistant_camera_config()
 {
     std::memset(g_tcp_image_copy, 0, sizeof(g_tcp_image_copy));
-
-    seekfree_assistant_camera_information_config(
-        SEEKFREE_ASSISTANT_MT9V03X,
-        g_tcp_image_copy[0],
-        TCP_IMAGE_WIDTH,
-        TCP_IMAGE_HEIGHT);
-
     std::memset(g_xy_x1_boundary, 0, sizeof(g_xy_x1_boundary));
     std::memset(g_xy_x2_boundary, 0, sizeof(g_xy_x2_boundary));
     std::memset(g_xy_x3_boundary, 0, sizeof(g_xy_x3_boundary));
     std::memset(g_xy_y1_boundary, 0, sizeof(g_xy_y1_boundary));
     std::memset(g_xy_y2_boundary, 0, sizeof(g_xy_y2_boundary));
     std::memset(g_xy_y3_boundary, 0, sizeof(g_xy_y3_boundary));
+
+    seekfree_assistant_camera_information_config(
+        SEEKFREE_ASSISTANT_MT9V03X,
+        g_tcp_image_copy[0],
+        TCP_IMAGE_WIDTH,
+        TCP_IMAGE_HEIGHT);
 
     seekfree_assistant_camera_boundary_config(
         XY_BOUNDARY,
@@ -114,10 +111,7 @@ static void assistant_camera_config(void)
         g_xy_y1_boundary, g_xy_y2_boundary, g_xy_y3_boundary);
 }
 
-/*
- * 函数名称: init_tcp_transfer
- * 功能描述: 初始化TCP图传
- */
+/* 初始化 TCP 与逐飞助手图像通道 */
 static int init_tcp_transfer()
 {
 #if TCP_ASSISTANT_ENABLE
@@ -129,7 +123,6 @@ static int init_tcp_transfer()
         g_tcp_enabled = 1;
         return 0;
     }
-
     std::printf("tcp_client error, tcp gray stream disabled\r\n");
     g_tcp_enabled = 0;
     return -1;
@@ -139,10 +132,7 @@ static int init_tcp_transfer()
 #endif
 }
 
-/*
- * 函数名称: tcp_update_boundaries
- * 功能描述: 更新TCP图传边界点
- */
+/* 更新边界数据 */
 static void tcp_update_boundaries(const frame_t &frame, const track_result_t &track)
 {
     if (frame.width != TCP_IMAGE_WIDTH || frame.height != TCP_IMAGE_HEIGHT)
@@ -187,10 +177,7 @@ static void tcp_update_boundaries(const frame_t &frame, const track_result_t &tr
         g_xy_y1_boundary, g_xy_y2_boundary, g_xy_y3_boundary);
 }
 
-/*
- * 函数名称: tcp_send_gray_frame
- * 功能描述: 发送一帧图像到逐飞助手
- */
+/* 发送一帧灰度图像到逐飞助手 */
 static void tcp_send_gray_frame(const frame_t &frame, const track_result_t &track)
 {
     if (!g_tcp_enabled || !frame.valid || frame.gray == nullptr)
@@ -224,10 +211,7 @@ static void tcp_send_gray_frame(const frame_t &frame, const track_result_t &trac
     g_tcp_send_guard = 0;
 }
 
-/*
- * 函数名称: tcp_poll_assistant
- * 功能描述: 轮询逐飞助手数据
- */
+/* TCP 助手轮询 */
 static void tcp_poll_assistant()
 {
     if (!g_tcp_enabled)
@@ -237,10 +221,7 @@ static void tcp_poll_assistant()
     seekfree_assistant_data_analysis();
 }
 
-/*
- * 函数名称: ramp_limit_int
- * 功能描述: 斜坡限幅函数，避免电机命令跳变过大
- */
+/* 整型斜坡限幅，防止电机命令一帧内跳变过大 */
 static int ramp_limit_int(int target, int current, int step)
 {
     if (target > current + step)
@@ -250,32 +231,23 @@ static int ramp_limit_int(int target, int current, int step)
     return target;
 }
 
-/*
- * 函数名称: init_encoder_feedback
- * 功能描述: 初始化编码器反馈
- */
+/* 初始化编码器反馈 */
 static void init_encoder_feedback(motor_state_t &motor_state)
 {
     g_encoder_left.clear_count();
     g_encoder_right.clear_count();
-
     g_dbg_left_count = 0;
     g_dbg_right_count = 0;
     g_dbg_left_raw_rps = 0.0f;
     g_dbg_right_raw_rps = 0.0f;
-
     motor_state.left_speed_rps = 0.0f;
     motor_state.right_speed_rps = 0.0f;
 }
 
-/*
- * 函数名称: update_encoder_feedback
- * 功能描述: 更新编码器反馈数据
- */
+/* 更新编码器反馈数据 */
 static void update_encoder_feedback(motor_state_t &motor_state)
 {
     const float dt_s = CONTROL_PERIOD_MS / 1000.0f;
-
     const int16 left_count = g_encoder_left.get_count();
     const int16 right_count = g_encoder_right.get_count();
 
@@ -309,31 +281,27 @@ static void update_encoder_feedback(motor_state_t &motor_state)
         right_rps * ENCODER_SPEED_FILTER_ALPHA;
 }
 
-/*
- * 函数名称: debug_print_motor_info
- * 功能描述: 打印电机/编码器调试信息
- */
+/* 调试打印电机和编码器信息 */
 static void debug_print_motor_info(const app_context_t &app)
 {
 #if MOTOR_DEBUG_PRINT_ENABLE
-    std::printf(
-        "MDBG LC=%d RC=%d RAW_L=%.3f RAW_R=%.3f "
-        "LS=%.3f RS=%.3f LT=%.3f RT=%.3f "
-        "CMD_L=%d CMD_R=%d ERR=%.1f VALID=%d LOST=%d BLK=%d\r\n",
-        (int)g_dbg_left_count,
-        (int)g_dbg_right_count,
-        g_dbg_left_raw_rps,
-        g_dbg_right_raw_rps,
-        app.motor.left_speed_rps,
-        app.motor.right_speed_rps,
-        app.motor.left_target_rps,
-        app.motor.right_target_rps,
-        app.motor.left_cmd,
-        app.motor.right_cmd,
-        app.track.error_filtered,
-        app.track.valid ? 1 : 0,
-        app.track.lost ? 1 : 0,
-        app.motor.blocked ? 1 : 0);
+    std::printf("MDBG LC=%d RC=%d RAW_L=%.3f RAW_R=%.3f "
+                "LS=%.3f RS=%.3f LT=%.3f RT=%.3f "
+                "CMD_L=%d CMD_R=%d ERR=%.1f VALID=%d LOST=%d BLK=%d\r\n",
+                (int)g_dbg_left_count,
+                (int)g_dbg_right_count,
+                g_dbg_left_raw_rps,
+                g_dbg_right_raw_rps,
+                app.motor.left_speed_rps,
+                app.motor.right_speed_rps,
+                app.motor.left_target_rps,
+                app.motor.right_target_rps,
+                app.motor.left_cmd,
+                app.motor.right_cmd,
+                app.track.error_filtered,
+                app.track.valid ? 1 : 0,
+                app.track.lost ? 1 : 0,
+                app.motor.blocked ? 1 : 0);
 
     std::fflush(stdout);
 #else
@@ -341,10 +309,7 @@ static void debug_print_motor_info(const app_context_t &app)
 #endif
 }
 
-/*
- * 函数名称: run_tracking_cycle
- * 功能描述: 运行一次循迹处理
- */
+/* 运行一次循迹处理 */
 static void run_tracking_cycle(UvcCamera &camera, app_context_t &app)
 {
     if (camera.capture(app.frame) == 0)
@@ -360,10 +325,7 @@ static void run_tracking_cycle(UvcCamera &camera, app_context_t &app)
     }
 }
 
-/*
- * 函数名称: update_motion_control
- * 功能描述: 运动控制核心函数
- */
+/* 更新运动控制核心 */
 static void update_motion_control(app_context_t &app,
                                   pid_controller_t &left_speed_pid,
                                   pid_controller_t &right_speed_pid,
@@ -372,11 +334,13 @@ static void update_motion_control(app_context_t &app,
     float speed_scale = 1.0f;
     float adaptive_kp = STEER_PD_KP_BASE;
     float adaptive_kd = STEER_PD_KD_BASE;
-
     static float last_track_error = 0.0f;
     static int lost_count = 0;
     static int last_left_cmd = 0;
     static int last_right_cmd = 0;
+
+    int left_output_command = 0;
+    int right_output_command = 0;
 
     if (app.motor.blocked)
     {
@@ -390,7 +354,7 @@ static void update_motion_control(app_context_t &app,
     }
 
     const bool track_ok = app.track.valid &&
-                         ((app.now_ms - app.track.timestamp_ms) <= CAMERA_TIMEOUT_MS);
+                           ((app.now_ms - app.track.timestamp_ms) <= CAMERA_TIMEOUT_MS);
 
     if (track_ok)
     {
@@ -412,16 +376,20 @@ static void update_motion_control(app_context_t &app,
         app.motor.left_target_rps = clampf(base_speed - differential_output, 0.0f, MOTOR_TURN_SPEED_LIMIT) / 100.0f;
         app.motor.right_target_rps = clampf(base_speed + differential_output, 0.0f, MOTOR_TURN_SPEED_LIMIT) / 100.0f;
 
-        int left_output_command = (int)pid_update(left_speed_pid, app.motor.left_target_rps,
-                                               app.motor.left_speed_rps, CONTROL_PERIOD_MS / 1000.0f);
-        int right_output_command = (int)pid_update(right_speed_pid, app.motor.right_target_rps,
-                                                app.motor.right_speed_rps, CONTROL_PERIOD_MS / 1000.0f);
+        left_output_command = (int)pid_update(left_speed_pid,
+                                             app.motor.left_target_rps,
+                                             app.motor.left_speed_rps,
+                                             CONTROL_PERIOD_MS / 1000.0f);
+        right_output_command = (int)pid_update(right_speed_pid,
+                                              app.motor.right_target_rps,
+                                              app.motor.right_speed_rps,
+                                              CONTROL_PERIOD_MS / 1000.0f);
 #else
         const int base_pwm = (int)(OPEN_LOOP_BASE_PWM * speed_scale);
         const int diff_pwm = (int)(differential_output);
 
-        int left_output_command = base_pwm - diff_pwm;
-        int right_output_command = base_pwm + diff_pwm;
+        left_output_command = base_pwm - diff_pwm;
+        right_output_command = base_pwm + diff_pwm;
 
         app.motor.left_target_rps = 0.0f;
         app.motor.right_target_rps = 0.0f;
@@ -448,14 +416,8 @@ static void update_motion_control(app_context_t &app,
         {
             last_left_cmd = (int)(last_left_cmd * 0.85f);
             last_right_cmd = (int)(last_right_cmd * 0.85f);
-            int left_output_command = last_left_cmd;
-            int right_output_command = last_right_cmd;
-
-            left_output_command = clampi(left_output_command, -MOTOR_FINAL_OUTPUT_LIMIT, MOTOR_FINAL_OUTPUT_LIMIT);
-            right_output_command = clampi(right_output_command, -MOTOR_FINAL_OUTPUT_LIMIT, MOTOR_FINAL_OUTPUT_LIMIT);
-
-            motor_driver.set_cmd(left_output_command, right_output_command, app.motor);
-            return;
+            left_output_command = last_left_cmd;
+            right_output_command = last_right_cmd;
         }
     }
 
@@ -525,7 +487,7 @@ int main()
              SPEED_PID_I_LIMIT, SPEED_PID_OUT_LIMIT);
 
     std::printf("%s start, version=%s, encoder=%d\r\n",
-               APP_NAME, APP_VERSION, ENCODER_FEEDBACK_ENABLE);
+                APP_NAME, APP_VERSION, ENCODER_FEEDBACK_ENABLE);
 
     while (g_app_running)
     {
@@ -553,7 +515,6 @@ int main()
             update_encoder_feedback(app.motor);
             motor_driver.check_block(app.motor, app.now_ms);
 #else
-            /* 无编码器时，仍读取编码器用于调试显示 */
             update_encoder_feedback(app.motor);
 #endif
             update_motion_control(app, left_speed_pid, right_speed_pid, motor_driver);
