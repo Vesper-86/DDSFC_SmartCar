@@ -258,6 +258,180 @@ static int average_width(const track_result_t &track, int y_start, int y_end)
     return sum / cnt;
 }
 
+
+struct white_run_t
+{
+    int left;
+    int right;
+    int center;
+    int width;
+    bool valid;
+};
+
+static white_run_t make_invalid_run()
+{
+    white_run_t run;
+    run.left = 0;
+    run.right = 0;
+    run.center = 0;
+    run.width = 0;
+    run.valid = false;
+    return run;
+}
+
+static white_run_t make_run(int left, int right)
+{
+    white_run_t run;
+    run.left = left;
+    run.right = right;
+    run.center = (left + right) / 2;
+    run.width = right - left + 1;
+    run.valid = (right >= left);
+    return run;
+}
+
+/*
+ * find_best_white_run_on_row()
+ * ---------------------------------------------------------------------------
+ * 在指定行寻找“可信白色连通段”。
+ *
+ * 为什么不用原来的“从 ref_mid 左右找 0/255 跳变”：
+ * - 你的二值图里赛道是大块白色区域，左右边界不一定刚好落在 ref_mid 附近；
+ * - 底部有车头遮挡时，原算法容易找不到右边界，然后退化成默认补线；
+ * - 这里改成先找整行白色连通段，再选最接近上一次中线的那一段，稳定性更好。
+ */
+static white_run_t find_best_white_run_on_row(int y, int ref_mid, int width)
+{
+    white_run_t best = make_invalid_run();
+    int best_score = 0x7fffffff;
+
+    y = clip_int(y, 0, CAM_HEIGHT - 1);
+    ref_mid = clip_int(ref_mid, 0, width - 1);
+
+    int x = 1;
+    while (x < width - 1)
+    {
+        while (x < width - 1 && g_binary[y][x] == 0)
+        {
+            ++x;
+        }
+
+        const int run_left = x;
+        while (x < width - 1 && g_binary[y][x] == 255)
+        {
+            ++x;
+        }
+        const int run_right = x - 1;
+
+        if (run_right >= run_left)
+        {
+            const int run_width = run_right - run_left + 1;
+            const int run_center = (run_left + run_right) / 2;
+
+            /*
+             * 过滤太窄的噪声白段。
+             * 对于特别宽的十字/环岛开口，不直接丢弃，但会通过分数惩罚，避免普通状态下乱跳。
+             */
+            if (run_width >= TRACK_MIN_LANE_WIDTH)
+            {
+                const bool contains_ref = (ref_mid >= run_left && ref_mid <= run_right);
+                const int center_dist = abs_int(run_center - ref_mid);
+                const int width_dist = abs_int(run_width - g_ctx.lane_width_est);
+                const int touch_edge_penalty =
+                    (run_left <= 2 || run_right >= width - 3) ? TRACK_DEFAULT_WIDTH : 0;
+
+                int score = center_dist * 4 + width_dist + touch_edge_penalty;
+                if (contains_ref)
+                {
+                    score -= TRACK_DEFAULT_WIDTH;
+                }
+
+                /*
+                 * 太宽的白段可能是十字或大弯，也可能是反光/背景。
+                 * 不禁止，但降低优先级。
+                 */
+                if (run_width > TRACK_MAX_LANE_WIDTH)
+                {
+                    score += (run_width - TRACK_MAX_LANE_WIDTH) * 2;
+                }
+
+                if (score < best_score)
+                {
+                    best_score = score;
+                    best = make_run(run_left, run_right);
+                }
+            }
+        }
+
+        ++x;
+    }
+
+    return best;
+}
+
+/*
+ * find_seed_run_from_roi()
+ * ---------------------------------------------------------------------------
+ * 从 ROI 底部往上找第一条可靠白色连通段作为起点。
+ * 这比“最长白列”更适合当前 160x120 画面，因为底部车体遮挡会破坏白列统计。
+ */
+static white_run_t find_seed_run_from_roi(const frame_t &frame)
+{
+    const int roi_top = clip_int(TRACK_ROI_Y0, 0, frame.height - 1);
+    const int roi_bottom = clip_int(TRACK_ROI_Y1 - 1, roi_top, frame.height - 1);
+    const int center_ref = clip_int(g_ctx.last_mid_line, 5, frame.width - 6);
+
+    white_run_t best = make_invalid_run();
+    int best_y = roi_bottom;
+    int best_score = 0x7fffffff;
+
+    /*
+     * 只在 ROI 下半部分找种子，优先使用近处赛道；
+     * 但不直接使用最底部，避免车头遮挡造成误判。
+     */
+    const int seed_top = clip_int(roi_bottom - TRACK_SEED_ROW_LOOKUP, roi_top, roi_bottom);
+
+    for (int y = roi_bottom; y >= seed_top; --y)
+    {
+        white_run_t run = find_best_white_run_on_row(y, center_ref, frame.width);
+        if (!run.valid)
+        {
+            continue;
+        }
+
+        const int center_dist = abs_int(run.center - center_ref);
+        const int width_dist = abs_int(run.width - g_ctx.lane_width_est);
+        const int bottom_bonus = (roi_bottom - y);
+        const int score = center_dist * 5 + width_dist + bottom_bonus;
+
+        if (score < best_score)
+        {
+            best_score = score;
+            best = run;
+            best_y = y;
+        }
+    }
+
+    if (best.valid)
+    {
+        g_ctx.seed_column = best.center;
+        g_ctx.search_top_y = roi_top;
+        g_ctx.search_stop_line = roi_bottom - roi_top + 1;
+        (void)best_y;
+        return best;
+    }
+
+    /*
+     * 如果 ROI 下半部分没有找到可信白段，用上一次中线 + 参考宽度兜底。
+     */
+    const int half = clip_int(g_ctx.lane_width_est / 2, TRACK_MIN_LANE_WIDTH / 2, TRACK_MAX_LANE_WIDTH / 2);
+    g_ctx.seed_column = center_ref;
+    g_ctx.search_top_y = roi_top;
+    g_ctx.search_stop_line = roi_bottom - roi_top + 1;
+    return make_run(clip_int(center_ref - half, 1, frame.width - 2),
+                    clip_int(center_ref + half, 1, frame.width - 2));
+}
+
 static void find_longest_white_column(const frame_t &frame)
 {
     std::memset(g_white_column, 0, sizeof(g_white_column));
@@ -266,15 +440,12 @@ static void find_longest_white_column(const frame_t &frame)
     const int roi_bottom = clip_int(TRACK_ROI_Y1 - 1, roi_top, frame.height - 1);
 
     /*
-     * 只在上一次中线附近寻找种子，避免被画面两侧的大面积白区吸走。
-     * 同时只从 ROI 底部向上统计白列，避开底部车头/支架遮挡。
+     * 保留 white_column 统计，便于后续调试；
+     * 但真实种子改为“ROI 近处白色连通段”，不再单纯依赖最长白列。
      */
     const int center_ref = clip_int(g_ctx.last_mid_line, 5, frame.width - 6);
     const int start_column = clip_int(center_ref - TRACK_SEED_SEARCH_HALF_WIDTH, 5, frame.width - 6);
     const int end_column = clip_int(center_ref + TRACK_SEED_SEARCH_HALF_WIDTH, 5, frame.width - 6);
-
-    int best_len = 0;
-    int best_col = center_ref;
 
     for (int x = start_column; x <= end_column; ++x)
     {
@@ -291,86 +462,104 @@ static void find_longest_white_column(const frame_t &frame)
             }
         }
         g_white_column[x] = static_cast<uint8_t>(clip_int(len, 0, 255));
-        if (len > best_len)
+    }
+
+    white_run_t seed = find_seed_run_from_roi(frame);
+    if (seed.valid)
+    {
+        g_ctx.seed_column = seed.center;
+        /*
+         * 种子行宽可信时，温和更新宽度估计，避免三条线挤在一起。
+         */
+        if (seed.width >= TRACK_MIN_LANE_WIDTH && seed.width <= TRACK_MAX_LANE_WIDTH)
         {
-            best_len = len;
-            best_col = x;
+            g_ctx.lane_width_est = clip_int((g_ctx.lane_width_est * 7 + seed.width * 3) / 10,
+                                            TRACK_MIN_LANE_WIDTH,
+                                            TRACK_MAX_LANE_WIDTH);
         }
     }
-
-    if (best_len < TRACK_MIN_WHITE_COLUMN_LEN)
-    {
-        best_len = TRACK_MIN_WHITE_COLUMN_LEN;
-        best_col = center_ref;
-    }
-
-    g_ctx.seed_column = clip_int(best_col, 2, frame.width - 3);
-    g_ctx.search_stop_line = clip_int(best_len + TRACK_SEARCH_STOP_MARGIN,
-                                      TRACK_MIN_SEARCH_STOP_LINE,
-                                      roi_bottom - roi_top + 1);
-    g_ctx.search_top_y = clip_int(roi_bottom - g_ctx.search_stop_line + 1,
-                                  roi_top,
-                                  roi_bottom);
 }
 
 static void search_edges_from_seed(track_result_t &track, const frame_t &frame)
 {
+    const int roi_top = clip_int(TRACK_ROI_Y0, 0, frame.height - 1);
+    const int roi_bottom = clip_int(TRACK_ROI_Y1 - 1, roi_top, frame.height - 1);
+
     int ref_mid = clip_int(g_ctx.seed_column, 2, frame.width - 3);
     int ref_width = clip_int(g_ctx.lane_width_est, TRACK_MIN_LANE_WIDTH, TRACK_MAX_LANE_WIDTH);
-    const int roi_bottom = clip_int(TRACK_ROI_Y1 - 1, 0, frame.height - 1);
 
-    for (int y = roi_bottom; y >= g_ctx.search_top_y; --y)
+    /*
+     * 从近处向远处逐行追踪白色连通段：
+     * - 找到真实白段：左右边界直接取该段左右端点；
+     * - 没找到白段：用上一行中心 + 历史宽度兜底；
+     * - 不再直接退化到 0 / 159，避免出现整幅图贴边线。
+     */
+    for (int y = roi_bottom; y >= roi_top; --y)
     {
-        int half_search = ref_width / 2 + 8;
-        half_search = clip_int(half_search, TRACK_MIN_SEARCH_HALF, frame.width / 2 - 2);
-
-        const int left_start = clip_int(ref_mid, 2, frame.width - 3);
-        const int left_limit = clip_int(ref_mid - half_search, 2, frame.width - 3);
-        const int right_start = clip_int(ref_mid, 2, frame.width - 3);
-        const int right_limit = clip_int(ref_mid + half_search, 2, frame.width - 3);
-
-        int left_found = -1;
-        int right_found = -1;
-
-        for (int x = left_start; x >= left_limit; --x)
-        {
-            if (g_binary[y][x - 1] == 0 && g_binary[y][x] == 255)
-            {
-                left_found = x;
-                break;
-            }
-        }
-
-        for (int x = right_start; x <= right_limit; ++x)
-        {
-            if (g_binary[y][x] == 255 && g_binary[y][x + 1] == 0)
-            {
-                right_found = x;
-                break;
-            }
-        }
+        white_run_t run = find_best_white_run_on_row(y, ref_mid, frame.width);
 
         bool left_lost = false;
         bool right_lost = false;
+        int left_found = 0;
+        int right_found = 0;
 
-        if (left_found < 0)
+        if (run.valid)
         {
-            left_lost = true;
-            left_found = clip_int(ref_mid - ref_width / 2, 1, frame.width - 2);
+            int run_width = run.width;
+
+            /*
+             * 如果白段过宽，说明可能在十字/环岛/大弯开口区。
+             * 这时仍然保留真实边界，但宽度估计不立即跟随到过大值。
+             */
+            left_found = clip_int(run.left, 1, frame.width - 2);
+            right_found = clip_int(run.right, left_found + 1, frame.width - 1);
+
+            if (run_width > TRACK_MAX_LANE_WIDTH)
+            {
+                /*
+                 * 白段过宽时，不再把显示边线截成“默认宽度”。
+                 * 你现在的赛道近处白区本来就可能很宽，截断会导致右边线飘在路面中间。
+                 * 这里保留真实左右端点，只是不拿这个过宽值去快速更新 lane_width_est。
+                 */
+                left_lost = false;
+                right_lost = false;
+            }
+            else if (run_width < TRACK_MIN_LANE_WIDTH)
+            {
+                const int half = clip_int(ref_width / 2, TRACK_MIN_LANE_WIDTH / 2, TRACK_MAX_LANE_WIDTH / 2);
+                left_found = clip_int(ref_mid - half, 1, frame.width - 2);
+                right_found = clip_int(ref_mid + half, left_found + 1, frame.width - 1);
+                left_lost = true;
+                right_lost = true;
+            }
+            else
+            {
+                const int new_width = right_found - left_found;
+                ref_width = clip_int((ref_width * 7 + new_width * 3) / 10,
+                                     TRACK_MIN_LANE_WIDTH,
+                                     TRACK_MAX_LANE_WIDTH);
+                g_ctx.lane_width_est = clip_int((g_ctx.lane_width_est * 8 + new_width * 2) / 10,
+                                                TRACK_MIN_LANE_WIDTH,
+                                                TRACK_MAX_LANE_WIDTH);
+            }
         }
-        if (right_found < 0)
+        else
         {
+            const int half = clip_int(ref_width / 2, TRACK_MIN_LANE_WIDTH / 2, TRACK_MAX_LANE_WIDTH / 2);
+            left_found = clip_int(ref_mid - half, 1, frame.width - 2);
+            right_found = clip_int(ref_mid + half, left_found + 1, frame.width - 1);
+            left_lost = true;
             right_lost = true;
-            right_found = clip_int(ref_mid + ref_width / 2, 1, frame.width - 2);
         }
 
         const int width_found = right_found - left_found;
         if (width_found < TRACK_MIN_LANE_WIDTH || width_found > TRACK_MAX_LANE_WIDTH || left_found >= right_found)
         {
+            const int half = clip_int(ref_width / 2, TRACK_MIN_LANE_WIDTH / 2, TRACK_MAX_LANE_WIDTH / 2);
+            left_found = clip_int(ref_mid - half, 1, frame.width - 2);
+            right_found = clip_int(ref_mid + half, left_found + 1, frame.width - 1);
             left_lost = true;
             right_lost = true;
-            left_found = clip_int(ref_mid - ref_width / 2, 1, frame.width - 3);
-            right_found = clip_int(ref_mid + ref_width / 2, left_found + 2, frame.width - 2);
         }
 
         track.full_left[y] = left_found;
@@ -379,25 +568,37 @@ static void search_edges_from_seed(track_result_t &track, const frame_t &frame)
         track.full_left_lost[y] = left_lost ? 1 : 0;
         track.full_right_lost[y] = right_lost ? 1 : 0;
 
-        if (!left_lost && !right_lost)
+        /*
+         * 中心点平滑追踪：真实白段中心权重大，兜底补线中心权重小。
+         */
+        const int detected_mid = track.full_center[y];
+        if (!left_lost || !right_lost)
         {
-            const int new_width = right_found - left_found;
-            ref_width = clip_int((ref_width * 7 + new_width * 3) / 10,
-                                 TRACK_MIN_LANE_WIDTH,
-                                 TRACK_MAX_LANE_WIDTH);
-            g_ctx.lane_width_est = clip_int((g_ctx.lane_width_est * 8 + new_width * 2) / 10,
-                                            TRACK_MIN_LANE_WIDTH,
-                                            TRACK_MAX_LANE_WIDTH);
+            ref_mid = clip_int((ref_mid * 3 + detected_mid * 7) / 10, 1, frame.width - 2);
         }
-
-        ref_mid = track.full_center[y];
+        else
+        {
+            ref_mid = clip_int((ref_mid * 8 + detected_mid * 2) / 10, 1, frame.width - 2);
+        }
     }
 
-    for (int y = g_ctx.search_top_y - 1; y >= 0; --y)
+    /*
+     * ROI 以外的行只用于显示，不参与控制。
+     */
+    for (int y = roi_top - 1; y >= 0; --y)
     {
-        track.full_left[y] = track.full_left[g_ctx.search_top_y];
-        track.full_right[y] = track.full_right[g_ctx.search_top_y];
-        track.full_center[y] = track.full_center[g_ctx.search_top_y];
+        track.full_left[y] = track.full_left[roi_top];
+        track.full_right[y] = track.full_right[roi_top];
+        track.full_center[y] = track.full_center[roi_top];
+        track.full_left_lost[y] = 1;
+        track.full_right_lost[y] = 1;
+    }
+
+    for (int y = roi_bottom + 1; y < frame.height; ++y)
+    {
+        track.full_left[y] = track.full_left[roi_bottom];
+        track.full_right[y] = track.full_right[roi_bottom];
+        track.full_center[y] = track.full_center[roi_bottom];
         track.full_left_lost[y] = 1;
         track.full_right_lost[y] = 1;
     }

@@ -63,9 +63,9 @@
  * - CAMERA_FLIP_HORIZONTAL : 左右镜像，若左右方向反了再开启；
  * - CAMERA_ROTATE_180      : 同时做上下 + 左右，相当于旋转 180 度。
  */
-#define CAMERA_FLIP_VERTICAL   1
+#define CAMERA_FLIP_VERTICAL   0
 #define CAMERA_FLIP_HORIZONTAL 0
-#define CAMERA_ROTATE_180      0
+#define CAMERA_ROTATE_180      1
 
 /* -------------------------
  * 图传参数
@@ -114,8 +114,8 @@
 #define TRACK_OVERLAY_POINT_HALF_SIZE 1
 
 /* 调试显示图像源。0: 显示灰度图；1: 显示 line_track 内部二值图。 */
-#define TCP_SHOW_BINARY_IMAGE 0
-#define IPS_SHOW_BINARY_IMAGE 0
+#define TCP_SHOW_BINARY_IMAGE 1
+#define IPS_SHOW_BINARY_IMAGE 1
 
 /* -------------------------
  * 基础循迹参数（160x120 版）
@@ -133,6 +133,7 @@
 #define TRACK_OTSU_SAMPLE_STRIDE 2
 #define TRACK_BINARY_DENOISE_ENABLE 1
 #define TRACK_MIN_WHITE_COLUMN_LEN 6
+#define TRACK_SEED_ROW_LOOKUP 34
 #define TRACK_SEARCH_STOP_MARGIN 8
 #define TRACK_MIN_SEARCH_STOP_LINE 30
 
@@ -147,7 +148,7 @@
 #define TRACK_SEED_SEARCH_HALF_WIDTH 50
 #define TRACK_MIN_SEARCH_HALF 16
 #define TRACK_MIN_LANE_WIDTH 22
-#define TRACK_MAX_LANE_WIDTH 120
+#define TRACK_MAX_LANE_WIDTH 135
 #define TRACK_DEFAULT_WIDTH 70
 #define TRACK_EDGE_GRAD_MIN 4
 #define TRACK_WIDTH_FILTER_ALPHA 0.12f
