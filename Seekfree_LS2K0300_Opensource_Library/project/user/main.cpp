@@ -130,9 +130,9 @@ static void tcp_update_boundaries(const frame_t &frame, const track_result_t &tr
 
     for (int y = 0; y < TCP_IMAGE_HEIGHT; ++y)
     {
-        int left = track.valid ? track.full_left[y] : 0;
-        int center = track.valid ? track.full_center[y] : (TCP_IMAGE_WIDTH / 2);
-        int right = track.valid ? track.full_right[y] : (TCP_IMAGE_WIDTH - 1);
+        int left = track.full_left[y];
+        int center = track.full_center[y];
+        int right = track.full_right[y];
 
         left = clampi(left, 0, TCP_IMAGE_WIDTH - 1);
         center = clampi(center, 0, TCP_IMAGE_WIDTH - 1);
@@ -142,6 +142,47 @@ static void tcp_update_boundaries(const frame_t &frame, const track_result_t &tr
         g_x2_boundary[y] = static_cast<uint8>(center);
         g_x3_boundary[y] = static_cast<uint8>(right);
     }
+#elif (3 == INCLUDE_BOUNDARY_TYPE)
+    if (frame.width != TCP_IMAGE_WIDTH || frame.height != TCP_IMAGE_HEIGHT)
+    {
+        return;
+    }
+
+    int count = 0;
+    const int y0 = clampi(TRACK_ROI_Y0, 0, TCP_IMAGE_HEIGHT - 1);
+    const int y1 = clampi(TRACK_ROI_Y1, y0 + 1, TCP_IMAGE_HEIGHT);
+
+    for (int y = y1 - 1; y >= y0 && count < BOUNDARY_NUM; --y)
+    {
+        const int left = clampi(track.full_left[y], 0, TCP_IMAGE_WIDTH - 1);
+        const int center = clampi(track.full_center[y], 0, TCP_IMAGE_WIDTH - 1);
+        const int right = clampi(track.full_right[y], 0, TCP_IMAGE_WIDTH - 1);
+
+        g_xy_x1_boundary[count] = static_cast<uint8>(left);
+        g_xy_y1_boundary[count] = static_cast<uint8>(y);
+        g_xy_x2_boundary[count] = static_cast<uint8>(center);
+        g_xy_y2_boundary[count] = static_cast<uint8>(y);
+        g_xy_x3_boundary[count] = static_cast<uint8>(right);
+        g_xy_y3_boundary[count] = static_cast<uint8>(y);
+        ++count;
+    }
+
+    if (count <= 0)
+    {
+        count = 1;
+        g_xy_x1_boundary[0] = 0;
+        g_xy_y1_boundary[0] = static_cast<uint8>(y0);
+        g_xy_x2_boundary[0] = TCP_IMAGE_WIDTH / 2;
+        g_xy_y2_boundary[0] = static_cast<uint8>(y0);
+        g_xy_x3_boundary[0] = TCP_IMAGE_WIDTH - 1;
+        g_xy_y3_boundary[0] = static_cast<uint8>(y0);
+    }
+
+    seekfree_assistant_camera_boundary_config(
+        XY_BOUNDARY,
+        count,
+        g_xy_x1_boundary, g_xy_x2_boundary, g_xy_x3_boundary,
+        g_xy_y1_boundary, g_xy_y2_boundary, g_xy_y3_boundary);
 #else
     (void)frame;
     (void)track;
@@ -189,6 +230,24 @@ static void assistant_camera_config(void)
         TCP_IMAGE_WIDTH,
         NULL, NULL, NULL,
         g_y1_boundary, g_y2_boundary, g_y3_boundary);
+#elif (3 == INCLUDE_BOUNDARY_TYPE)
+    std::memset(g_xy_x1_boundary, 0, sizeof(g_xy_x1_boundary));
+    std::memset(g_xy_x2_boundary, 0, sizeof(g_xy_x2_boundary));
+    std::memset(g_xy_x3_boundary, 0, sizeof(g_xy_x3_boundary));
+    std::memset(g_xy_y1_boundary, 0, sizeof(g_xy_y1_boundary));
+    std::memset(g_xy_y2_boundary, 0, sizeof(g_xy_y2_boundary));
+    std::memset(g_xy_y3_boundary, 0, sizeof(g_xy_y3_boundary));
+
+    seekfree_assistant_camera_information_config(
+        SEEKFREE_ASSISTANT_MT9V03X,
+        g_tcp_image_copy[0],
+        TCP_IMAGE_WIDTH,
+        TCP_IMAGE_HEIGHT);
+    seekfree_assistant_camera_boundary_config(
+        XY_BOUNDARY,
+        1,
+        g_xy_x1_boundary, g_xy_x2_boundary, g_xy_x3_boundary,
+        g_xy_y1_boundary, g_xy_y2_boundary, g_xy_y3_boundary);
 #elif (4 == INCLUDE_BOUNDARY_TYPE)
     std::memset(g_x1_boundary, 0, sizeof(g_x1_boundary));
     std::memset(g_x2_boundary, TCP_IMAGE_WIDTH / 2, sizeof(g_x2_boundary));
@@ -259,7 +318,16 @@ static void tcp_send_gray_frame(const frame_t &frame, const track_result_t &trac
     }
 
     g_tcp_send_guard = 1;
-    std::memcpy(g_tcp_image_copy[0], frame.gray, (size_t)TCP_IMAGE_WIDTH * (size_t)TCP_IMAGE_HEIGHT);
+#if TCP_SHOW_BINARY_IMAGE
+    const uint8_t *tcp_image_src = line_track_get_binary_image();
+    if (tcp_image_src == nullptr)
+    {
+        tcp_image_src = frame.gray;
+    }
+#else
+    const uint8_t *tcp_image_src = frame.gray;
+#endif
+    std::memcpy(g_tcp_image_copy[0], tcp_image_src, (size_t)TCP_IMAGE_WIDTH * (size_t)TCP_IMAGE_HEIGHT);
     tcp_update_boundaries(frame, track);
     seekfree_assistant_camera_send();
     g_tcp_send_guard = 0;

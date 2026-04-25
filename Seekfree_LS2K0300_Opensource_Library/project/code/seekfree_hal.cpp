@@ -1,4 +1,5 @@
 #include "seekfree_hal.hpp"
+#include "line_track.hpp"
 #include <cstring>
 
 #ifndef RGB565_RED
@@ -241,9 +242,18 @@ void IpsStatusView::show_image_status(const frame_t &frame,
 #if IPS_IMAGE_ENABLE
     if (frame.valid && frame.gray != nullptr && frame.width > 0 && frame.height > 0)
     {
+#if IPS_SHOW_BINARY_IMAGE
+        const uint8_t *ips_image_src = line_track_get_binary_image();
+        if (ips_image_src == nullptr)
+        {
+            ips_image_src = frame.gray;
+        }
+#else
+        const uint8_t *ips_image_src = frame.gray;
+#endif
         ips_.show_gray_image(IPS_IMAGE_X,
                              IPS_IMAGE_Y,
-                             frame.gray,
+                             ips_image_src,
                              static_cast<uint16>(frame.width),
                              static_cast<uint16>(frame.height),
                              IPS_IMAGE_W,
@@ -259,7 +269,9 @@ void IpsStatusView::show_image_status(const frame_t &frame,
             int sample_right[CAM_HEIGHT] = {0};
             int sample_count = 0;
 
-            for (int y = TRACK_TOP_LINE; y < frame.height && y < CAM_HEIGHT; ++y)
+            const int draw_y0 = clampi(TRACK_ROI_Y0, 0, frame.height - 1);
+            const int draw_y1 = clampi(TRACK_ROI_Y1, draw_y0 + 1, frame.height);
+            for (int y = draw_y0; y < draw_y1 && y < CAM_HEIGHT; ++y)
             {
                 sample_y[sample_count] = y;
                 sample_left[sample_count] = clampi(track.full_left[y], 0, frame.width - 1);

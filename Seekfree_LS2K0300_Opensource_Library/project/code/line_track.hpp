@@ -19,3 +19,6 @@ float line_track_compute_speed_scale(const track_result_t &track_result);
 /* 返回当前元素名称，便于显示调试。 */
 const char *line_track_element_name(uint8_t element);
 const char *line_track_state_name(uint8_t state);
+
+/* 返回最近一次 line_track_process() 生成的二值图首地址，用于 TCP/IPS 调试显示。 */
+const uint8_t *line_track_get_binary_image();

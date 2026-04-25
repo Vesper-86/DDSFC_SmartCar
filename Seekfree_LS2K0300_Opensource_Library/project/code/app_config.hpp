@@ -16,7 +16,7 @@
  * 工程基本信息
  * ------------------------- */
 #define APP_NAME "DDSFC_ThreeWheel_NoServo_CrossRing"
-#define APP_VERSION "4.3.0_image_track_core"
+#define APP_VERSION "4.4.0_roi_seed_fix"
 
 /* -------------------------
  * 功能开关
@@ -53,6 +53,21 @@
 #define CAM_FPS 180
 
 /* -------------------------
+ * 摄像头方向修正
+ * -------------------------
+ * 你的当前安装状态是上下反了，所以默认开启 CAMERA_FLIP_VERTICAL。
+ * 若后续把摄像头重新正装，只需要改为 0。
+ *
+ * 说明:
+ * - CAMERA_FLIP_VERTICAL   : 上下翻转，修正“近处在画面上方”的问题；
+ * - CAMERA_FLIP_HORIZONTAL : 左右镜像，若左右方向反了再开启；
+ * - CAMERA_ROTATE_180      : 同时做上下 + 左右，相当于旋转 180 度。
+ */
+#define CAMERA_FLIP_VERTICAL   1
+#define CAMERA_FLIP_HORIZONTAL 0
+#define CAMERA_ROTATE_180      0
+
+/* -------------------------
  * 图传参数
  * ------------------------- */
 #define TCP_SERVER_IP "10.124.199.185"
@@ -86,23 +101,28 @@
 /* -------------------------
  * 图传叠加边界类型
  * 0: 只发灰度图
- * 1: 发 X_BOUNDARY
+ * 1: 发 X_BOUNDARY，整行显示边界
  * 2: 发 Y_BOUNDARY
+ * 3: 发 XY_BOUNDARY，只显示 ROI 内真实边界点，推荐调试使用
  * 4: 只发边界不发底图
  * ------------------------- */
-#define INCLUDE_BOUNDARY_TYPE 1
+#define INCLUDE_BOUNDARY_TYPE 3
 #define BOUNDARY_NUM (TCP_IMAGE_HEIGHT * 2)
 
 /* TCP 与 IPS 叠加显示开关。 */
 #define TRACK_OVERLAY_ENABLE 1
 #define TRACK_OVERLAY_POINT_HALF_SIZE 1
 
+/* 调试显示图像源。0: 显示灰度图；1: 显示 line_track 内部二值图。 */
+#define TCP_SHOW_BINARY_IMAGE 0
+#define IPS_SHOW_BINARY_IMAGE 0
+
 /* -------------------------
  * 基础循迹参数（160x120 版）
  * ------------------------- */
 #define TRACK_SCAN_LINES 6
-#define TRACK_ROI_Y0 55
-#define TRACK_ROI_Y1 116
+#define TRACK_ROI_Y0 35
+#define TRACK_ROI_Y1 100
 #define TRACK_TOP_LINE 4
 #define TRACK_SEARCH_FINISH_LINE 15
 
@@ -112,25 +132,25 @@
 #define TRACK_BINARY_MAX 180
 #define TRACK_OTSU_SAMPLE_STRIDE 2
 #define TRACK_BINARY_DENOISE_ENABLE 1
-#define TRACK_MIN_WHITE_COLUMN_LEN 10
+#define TRACK_MIN_WHITE_COLUMN_LEN 6
 #define TRACK_SEARCH_STOP_MARGIN 8
 #define TRACK_MIN_SEARCH_STOP_LINE 30
 
 /* 图像中心与误差滤波。 */
 #define TRACK_CENTER_X (CAM_WIDTH / 2)
-#define TRACK_ERROR_FILTER_ALPHA 0.20f
+#define TRACK_ERROR_FILTER_ALPHA 0.12f
 #define TRACK_CURVATURE_FILTER_ALPHA 0.25f
-#define TRACK_VALID_RATIO_MIN 0.34f
+#define TRACK_VALID_RATIO_MIN 0.20f
 
 /* 边界搜索与赛道宽度约束。 */
-#define TRACK_LOCAL_SEARCH_MARGIN 22
-#define TRACK_SEED_SEARCH_HALF_WIDTH 36
-#define TRACK_MIN_SEARCH_HALF 10
-#define TRACK_MIN_LANE_WIDTH 13
-#define TRACK_MAX_LANE_WIDTH 110
-#define TRACK_DEFAULT_WIDTH 35
-#define TRACK_EDGE_GRAD_MIN 8
-#define TRACK_WIDTH_FILTER_ALPHA 0.25f
+#define TRACK_LOCAL_SEARCH_MARGIN 45
+#define TRACK_SEED_SEARCH_HALF_WIDTH 50
+#define TRACK_MIN_SEARCH_HALF 16
+#define TRACK_MIN_LANE_WIDTH 22
+#define TRACK_MAX_LANE_WIDTH 120
+#define TRACK_DEFAULT_WIDTH 70
+#define TRACK_EDGE_GRAD_MIN 4
+#define TRACK_WIDTH_FILTER_ALPHA 0.12f
 
 /* 中线输出平滑。 */
 #define TRACK_SMOOTH_ALPHA_NUM 8

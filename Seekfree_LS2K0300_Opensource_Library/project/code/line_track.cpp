@@ -262,15 +262,24 @@ static void find_longest_white_column(const frame_t &frame)
 {
     std::memset(g_white_column, 0, sizeof(g_white_column));
 
-    const int start_column = clip_int(5, 0, frame.width - 1);
-    const int end_column = clip_int(frame.width - 6, 0, frame.width - 1);
+    const int roi_top = clip_int(TRACK_ROI_Y0, 0, frame.height - 1);
+    const int roi_bottom = clip_int(TRACK_ROI_Y1 - 1, roi_top, frame.height - 1);
+
+    /*
+     * 只在上一次中线附近寻找种子，避免被画面两侧的大面积白区吸走。
+     * 同时只从 ROI 底部向上统计白列，避开底部车头/支架遮挡。
+     */
+    const int center_ref = clip_int(g_ctx.last_mid_line, 5, frame.width - 6);
+    const int start_column = clip_int(center_ref - TRACK_SEED_SEARCH_HALF_WIDTH, 5, frame.width - 6);
+    const int end_column = clip_int(center_ref + TRACK_SEED_SEARCH_HALF_WIDTH, 5, frame.width - 6);
+
     int best_len = 0;
-    int best_col = g_ctx.last_mid_line;
+    int best_col = center_ref;
 
     for (int x = start_column; x <= end_column; ++x)
     {
         int len = 0;
-        for (int y = frame.height - 1; y >= 0; --y)
+        for (int y = roi_bottom; y >= roi_top; --y)
         {
             if (g_binary[y][x] == 255)
             {
@@ -291,23 +300,26 @@ static void find_longest_white_column(const frame_t &frame)
 
     if (best_len < TRACK_MIN_WHITE_COLUMN_LEN)
     {
-        best_len = frame.height / 2;
-        best_col = g_ctx.last_mid_line;
+        best_len = TRACK_MIN_WHITE_COLUMN_LEN;
+        best_col = center_ref;
     }
 
     g_ctx.seed_column = clip_int(best_col, 2, frame.width - 3);
     g_ctx.search_stop_line = clip_int(best_len + TRACK_SEARCH_STOP_MARGIN,
                                       TRACK_MIN_SEARCH_STOP_LINE,
-                                      frame.height - TRACK_TOP_LINE);
-    g_ctx.search_top_y = clip_int(frame.height - g_ctx.search_stop_line, TRACK_TOP_LINE, frame.height - 1);
+                                      roi_bottom - roi_top + 1);
+    g_ctx.search_top_y = clip_int(roi_bottom - g_ctx.search_stop_line + 1,
+                                  roi_top,
+                                  roi_bottom);
 }
 
 static void search_edges_from_seed(track_result_t &track, const frame_t &frame)
 {
     int ref_mid = clip_int(g_ctx.seed_column, 2, frame.width - 3);
     int ref_width = clip_int(g_ctx.lane_width_est, TRACK_MIN_LANE_WIDTH, TRACK_MAX_LANE_WIDTH);
+    const int roi_bottom = clip_int(TRACK_ROI_Y1 - 1, 0, frame.height - 1);
 
-    for (int y = frame.height - 1; y >= g_ctx.search_top_y; --y)
+    for (int y = roi_bottom; y >= g_ctx.search_top_y; --y)
     {
         int half_search = ref_width / 2 + 8;
         half_search = clip_int(half_search, TRACK_MIN_SEARCH_HALF, frame.width / 2 - 2);
@@ -396,7 +408,7 @@ static void collect_statistics(track_result_t &track)
     const int y_mid_start = CAM_HEIGHT / 3;
     const int y_mid_end = CAM_HEIGHT * 3 / 4;
 
-    for (int y = TRACK_TOP_LINE; y < CAM_HEIGHT; ++y)
+    for (int y = TRACK_ROI_Y0; y < TRACK_ROI_Y1 && y < CAM_HEIGHT; ++y)
     {
         if (track.full_left_lost[y]) ++g_ctx.left_lost_total;
         if (track.full_right_lost[y]) ++g_ctx.right_lost_total;
@@ -410,16 +422,18 @@ static void collect_statistics(track_result_t &track)
         }
     }
 
-    g_ctx.road_width_base = average_width(track, CAM_HEIGHT - 18, CAM_HEIGHT - 2);
-    g_ctx.road_width_far = average_width(track, CAM_HEIGHT / 3, CAM_HEIGHT / 2 + 8);
+    const int roi_top = clip_int(TRACK_ROI_Y0, 0, CAM_HEIGHT - 1);
+    const int roi_bottom = clip_int(TRACK_ROI_Y1 - 1, roi_top, CAM_HEIGHT - 1);
+    g_ctx.road_width_base = average_width(track, roi_bottom - 18, roi_bottom - 2);
+    g_ctx.road_width_far = average_width(track, roi_top, (roi_top + roi_bottom) / 2 + 8);
 }
 
 static void locate_corners_by_boundary_shape(const track_result_t &track)
 {
-    const int mid_top = CAM_HEIGHT / 3;
-    const int mid_bottom = CAM_HEIGHT - 8;
+    const int mid_top = clip_int(TRACK_ROI_Y0, 0, CAM_HEIGHT - 1);
+    const int mid_bottom = clip_int(TRACK_ROI_Y1 - 1, mid_top, CAM_HEIGHT - 1);
 
-    for (int y = CAM_HEIGHT - 2; y >= mid_top + 2; --y)
+    for (int y = mid_bottom - 1; y >= mid_top + 2; --y)
     {
         const int dl = track.full_left[y] - track.full_left[y - 2];
         const int dr = track.full_right[y] - track.full_right[y - 2];
@@ -501,7 +515,7 @@ static void apply_cross_repair(track_result_t &track)
     int width_ref = clip_int(g_ctx.road_width_base, TRACK_MIN_LANE_WIDTH, TRACK_MAX_LANE_WIDTH);
     int valid_mid = g_ctx.last_mid_line;
 
-    for (int y = CAM_HEIGHT - 1; y >= TRACK_TOP_LINE; --y)
+    for (int y = clip_int(TRACK_ROI_Y1 - 1, 0, CAM_HEIGHT - 1); y >= TRACK_ROI_Y0; --y)
     {
         if (!track.full_left_lost[y] && !track.full_right_lost[y])
         {
@@ -583,9 +597,9 @@ static void apply_ring_left_repair(track_result_t &track)
 {
     const int width_ref = clip_int(g_ctx.road_width_base, TRACK_MIN_LANE_WIDTH, TRACK_MAX_LANE_WIDTH);
     const int top = g_ctx.right_down.valid ? g_ctx.right_down.y : (CAM_HEIGHT / 2);
-    extend_right_line(track, TRACK_TOP_LINE, top);
+    extend_right_line(track, TRACK_ROI_Y0, top);
 
-    for (int y = CAM_HEIGHT - 1; y >= TRACK_TOP_LINE; --y)
+    for (int y = clip_int(TRACK_ROI_Y1 - 1, 0, CAM_HEIGHT - 1); y >= TRACK_ROI_Y0; --y)
     {
         if (track.full_left_lost[y])
         {
@@ -604,9 +618,9 @@ static void apply_ring_right_repair(track_result_t &track)
 {
     const int width_ref = clip_int(g_ctx.road_width_base, TRACK_MIN_LANE_WIDTH, TRACK_MAX_LANE_WIDTH);
     const int top = g_ctx.left_down.valid ? g_ctx.left_down.y : (CAM_HEIGHT / 2);
-    extend_left_line(track, TRACK_TOP_LINE, top);
+    extend_left_line(track, TRACK_ROI_Y0, top);
 
-    for (int y = CAM_HEIGHT - 1; y >= TRACK_TOP_LINE; --y)
+    for (int y = clip_int(TRACK_ROI_Y1 - 1, 0, CAM_HEIGHT - 1); y >= TRACK_ROI_Y0; --y)
     {
         if (track.full_right_lost[y])
         {
@@ -768,8 +782,9 @@ static int compute_weighted_mid(track_result_t &track)
     uint32_t weighted_sum = 0;
     uint32_t weight_sum = 0;
 
-    const int y_start = clip_int(TRACK_SEARCH_FINISH_LINE, 0, CAM_HEIGHT - 2);
-    for (int y = CAM_HEIGHT - 1; y > y_start; --y)
+    const int y_start = clip_int(TRACK_SEARCH_FINISH_LINE, TRACK_ROI_Y0, CAM_HEIGHT - 2);
+    const int y_end = clip_int(TRACK_ROI_Y1 - 1, y_start + 1, CAM_HEIGHT - 1);
+    for (int y = y_end; y > y_start; --y)
     {
         const int weight = dynamic_mid_weight(y);
         weighted_sum += static_cast<uint32_t>(track.full_center[y] * weight);
@@ -817,8 +832,9 @@ static void finalize_result(track_result_t &track, const frame_t &frame)
 
     int real_valid_rows = 0;
     int roi_rows = 0;
-    const int y0 = clip_int(TRACK_TOP_LINE, 0, CAM_HEIGHT - 1);
-    for (int y = y0; y < CAM_HEIGHT; ++y)
+    const int y0 = clip_int(TRACK_ROI_Y0, 0, CAM_HEIGHT - 1);
+    const int y1 = clip_int(TRACK_ROI_Y1, y0 + 1, CAM_HEIGHT);
+    for (int y = y0; y < y1; ++y)
     {
         ++roi_rows;
         if (!(track.full_left_lost[y] && track.full_right_lost[y]))
@@ -831,8 +847,8 @@ static void finalize_result(track_result_t &track, const frame_t &frame)
     g_quality_hint = g_quality_hint * 0.80f + valid_ratio * 0.20f;
     track.quality_hint = g_quality_hint;
 
-    const int near_y = CAM_HEIGHT - 8;
-    const int far_y = clip_int(CAM_HEIGHT / 2, 0, CAM_HEIGHT - 1);
+    const int near_y = clip_int(TRACK_ROI_Y1 - 8, TRACK_ROI_Y0, CAM_HEIGHT - 1);
+    const int far_y = clip_int((TRACK_ROI_Y0 + TRACK_ROI_Y1) / 2, 0, CAM_HEIGHT - 1);
     const float curvature_raw = static_cast<float>(track.full_center[far_y] - track.full_center[near_y]);
     g_curvature_hint = g_curvature_hint * (1.0f - TRACK_CURVATURE_FILTER_ALPHA) +
                        curvature_raw * TRACK_CURVATURE_FILTER_ALPHA;
@@ -972,4 +988,9 @@ const char *line_track_state_name(uint8_t state)
     case TRACK_STATE_RING_RIGHT: return "RING_R";
     default:                     return "NORMAL";
     }
+}
+
+const uint8_t *line_track_get_binary_image()
+{
+    return &g_binary[0][0];
 }
